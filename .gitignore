@@ -28,6 +28,3 @@ Thumbs.db
 # Logs
 *.log
 logs/
-
-#temp
-iterative_prompts/2.generalized_extraction_pipeline.md
