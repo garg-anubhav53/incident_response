@@ -1,0 +1,38 @@
+{
+  "deployments": [
+    {
+      "id": "deploy_789",
+      "sha": "abc123def456",
+      "ref": "main",
+      "task": "deploy",
+      "environment": "production",
+      "description": "Database connection pool configuration update",
+      "created_at": "2025-03-20T13:45:00Z",
+      "updated_at": "2025-03-20T14:10:00Z",
+      "status": "success",
+      "repository": {
+        "name": "threat-detection-service",
+        "full_name": "company/threat-detection-service"
+      },
+      "payload": {
+        "deployment": {
+          "environment": "production",
+          "description": "Updated database connection timeout settings for improved reliability"
+        },
+        "commits": [
+          {
+            "id": "abc123def456",
+            "message": "Update database connection pool configuration\n\n- Increase connection timeout from 5s to 30s\n- Add retry logic for failed connections\n- Implement circuit breaker pattern",
+            "timestamp": "2025-03-20T13:40:00Z",
+            "author": {
+              "name": "Infrastructure Team",
+              "email": "infra@company.com"
+            },
+            "added": ["config/database.yml"],
+            "modified": ["src/db/connection.py"]
+          }
+        ]
+      }
+    }
+  ]
+}

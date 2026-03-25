@@ -15,25 +15,25 @@
     "resolved_time_utc": "2025-02-10T10:05:00Z"
   },
   "root_cause": {
-    "summary": "session-service-prod became unreachable, blocking SSO token validation required for portal authentication",
+    "summary": "session-service-prod backend became unreachable, blocking SSO token validation required for portal authentication",
     "status": "confirmed",
-    "trigger": "session-service-prod service failure",
-    "mechanism": "Portal auth service depends on session-service-prod for SSO token validation; when session service became unreachable at internal endpoint, all authentication requests failed"
+    "trigger": null,
+    "mechanism": "Portal auth service depends on session-service-prod for SSO token validation; when session service became unreachable at internal endpoint session-service-prod.internal:8080, all authentication requests failed"
   },
   "customer_impact": {
-    "description": "Customers were unable to log into the security portal for approximately 50 minutes. All login attempts failed during this period. Email threat detection and processing continued operating normally throughout the incident.",
+    "description": "Customers were unable to log into the security portal for approximately 50 minutes. Login attempts failed with authentication errors. Email threat detection and processing continued operating normally throughout the incident.",
     "severity_assessment": "full_outage",
     "affected_functionality": [
       "Portal login and authentication",
       "Access to portal dashboard and UI"
     ],
     "unaffected_functionality": [
-      "Email threat detection and processing (IES pipeline confirmed operational)"
+      "Email threat detection and processing (IES pipeline confirmed stable throughout incident)"
     ]
   },
   "resolution": {
     "action_taken": "Restarted session-service-prod pod at 09:45 UTC",
-    "confirmed_by": "CloudWatch log message 'session-service-prod connection restored, auth requests resuming' at 10:00 UTC; Prometheus metrics showing portal_auth_response_latency_seconds returned to baseline 0.22s at 10:00 UTC; engineer confirmation 'portal fully accessible again' at 10:05 UTC"
+    "confirmed_by": "Logs show 'session-service-prod connection restored' at 10:00 UTC; portal_auth_response_latency_seconds returned to baseline 0.22s at 10:00 UTC (from peak of 14s); engineer confirmed 'portal fully accessible again' at 10:05 UTC"
   },
   "confidence_scores": {
     "root_cause": "high",
@@ -44,41 +44,41 @@
   "source_attribution": {
     "root_cause": [
       "CloudWatch logs showing repeated 'session-service-prod unreachable' errors starting 09:10 UTC",
-      "Slack message from bob.sre at 09:20: 'logs show session-service-prod is unreachable, that's the auth backend'",
-      "Resolution confirmed by pod restart followed by service restoration"
+      "CloudWatch health check failure at 09:12 UTC specifying session-service-prod.internal:8080",
+      "Slack: engineer stated 'logs show session-service-prod is unreachable, that's the auth backend' at 09:20",
+      "Recovery correlation: pod restart at 09:45 followed by connection restoration at 10:00"
     ],
     "timeline": [
-      "onset_time: First CloudWatch ERROR log at 09:10:00Z",
-      "detection_time: PagerDuty alert trigger at 09:15:00Z",
-      "acknowledged_time: PagerDuty acknowledgment at 09:18:00Z",
-      "mitigation_time: CloudWatch INFO log 'Restarting session-service-prod pod' at 09:45:00Z",
-      "recovery_time: CloudWatch INFO log 'connection restored' and Prometheus metrics baseline recovery at 10:00:00Z",
-      "resolved_time: PagerDuty resolution at 10:05:00Z"
+      "Onset 09:10 UTC: First CloudWatch ERROR for SSO token validation failure",
+      "Detection 09:15 UTC: PagerDuty alert trigger",
+      "Acknowledged 09:18 UTC: PagerDuty timeline",
+      "Mitigation 09:45 UTC: CloudWatch INFO log 'Restarting session-service-prod pod'",
+      "Recovery 10:00 UTC: CloudWatch INFO 'connection restored' + Prometheus latency returned to 0.22s baseline",
+      "Resolved 10:05 UTC: PagerDuty resolution + Slack engineer confirmation"
     ],
     "customer_impact": [
-      "Slack messages from carol.dev at 09:14: 'getting SSO failures on login page - portal is down'",
-      "Slack message from bob.sre at 09:15: 'IES detection is still running - emails are being processed normally'",
-      "Slack message from bob.sre at 10:05: 'Detection was unaffected the entire time - only portal login was impacted'",
-      "Prometheus metrics showing ies_emails_processed_total remained stable at baseline ~4.5e+03 throughout incident",
-      "Prometheus metrics showing portal_auth_response_latency_seconds spiked from 0.2s baseline to 9.5-14s during incident"
+      "Slack 09:14: 'customers can't log in' and 'portal is down'",
+      "Prometheus: portal_auth_response_latency_seconds spiked from 0.2s baseline to 9.5s at onset, peaked at 14s",
+      "Slack 09:15: 'IES detection is still running - emails are being processed normally'",
+      "Prometheus: ies_emails_processed_total remained stable at ~4.5e+03 throughout incident",
+      "Slack 10:05: 'Detection was unaffected the entire time - only portal login was impacted'"
     ]
   },
   "data_gaps": [
-    "Root cause of why session-service-prod became unreachable is not explained in available data - only that it failed and required restart",
+    "Root trigger for session-service-prod becoming unreachable is not identified in available data - no deployment, infrastructure event, or resource exhaustion mentioned",
     "Geographic scope unknown - logs reference 'prod-us-east-1' but no confirmation whether other regions were affected or if service is single-region",
     "Number of affected customers or failed login attempts not quantified",
-    "Whether session-service-prod experienced a crash, network partition, resource exhaustion, or other specific failure mode is not documented"
+    "Session-service-prod failure mode unclear (crashed, network partition, resource starvation, etc.)"
   ],
   "internal_details_to_exclude": [
     "bob.sre@example.com",
     "carol.dev@example.com",
-    "session-service-prod",
-    "session-service-prod.internal:8080",
-    "prod-us-east-1",
-    "portal-auth-service (internal service name)",
-    "ies-pipeline (internal service name)",
+    "session-service-prod (internal service name)",
+    "session-service-prod.internal:8080 (internal hostname and port)",
+    "prod-us-east-1 (internal region identifier)",
     "commit abc1234",
-    "Slack channel thread",
-    "/aws/portal-auth-service log group"
+    "Slack channel/thread content",
+    "CloudWatch log group path /aws/portal-auth-service",
+    "ies-pipeline (internal service name)"
   ]
 }

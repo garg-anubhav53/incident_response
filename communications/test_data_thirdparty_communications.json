@@ -1,0 +1,25 @@
+{
+  "title": "Delayed Threat Remediation",
+  "communications": [
+    {
+      "stage": "investigating",
+      "posted_at_pt": "8:33 AM PT",
+      "message": "We are investigating reports of delayed automated remediation actions. Threat detection and alert generation continue to operate normally. Our team is actively investigating the cause of the delay. We will provide an update within 30 minutes."
+    },
+    {
+      "stage": "identified",
+      "posted_at_pt": "9:15 AM PT",
+      "message": "We have identified that automated remediation actions are currently delayed due to an upstream service provider issue. Threat detection, email security scanning, and alert generation remain fully operational. Detected threats are being queued and will be remediated automatically once the external service recovers. We are monitoring the situation closely and will provide an update within 30 minutes."
+    },
+    {
+      "stage": "monitoring",
+      "posted_at_pt": "10:55 AM PT",
+      "message": "The upstream service has been restored and automated remediation actions are resuming. Queued actions from the outage period are now being processed. We are monitoring system performance to ensure full recovery. Next update within 15 minutes."
+    },
+    {
+      "stage": "resolved",
+      "posted_at_pt": "11:05 AM PT",
+      "message": "This incident has been resolved. Automated remediation is fully operational and all queued actions have been processed.\n\nIncident Summary:\n- Start: February 15, 8:25 AM PT\n- Resolution: February 15, 11:00 AM PT\n- Duration: Approximately 2 hours 35 minutes\n- Impact: Automated remediation actions were delayed while threat detection remained fully operational\n\nWe apologize for any inconvenience this may have caused."
+    }
+  ]
+}

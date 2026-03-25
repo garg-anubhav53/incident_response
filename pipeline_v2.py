@@ -1,6 +1,8 @@
-import csv
 import os
 import json
+import csv
+import subprocess
+import sys
 from pathlib import Path
 from datetime import datetime, timezone
 from dotenv import load_dotenv
@@ -129,23 +131,23 @@ def load_incident_files(data_dir: Path) -> dict:
     return files_by_type
 
 
-def _parse_prometheus(data: dict) -> list:
-    """Return list of (name, labels_str, [(timestamp, value)]) tuples."""
+def _parse_prometheus(prometheus_data):
+    """Parse Prometheus JSON into (name, labels, [(timestamp, value)]) tuples."""
     result = []
-    if "metrics" in data:
-        for m in data["metrics"]:
-            name = m["metric_name"]
-            labels = ",".join(f"{k}={v}" for k, v in m.get("labels", {}).items())
-            values = [(v["timestamp"], float(v["value"])) for v in m.get("values", [])]
-            result.append((name, labels, values))
-    elif "data" in data and "result" in data.get("data", {}):
-        for r in data["data"]["result"]:
+    if prometheus_data and "data" in prometheus_data:
+        for r in prometheus_data["data"].get("result", []):
             name = r["metric"].get("__name__", "metric")
             labels = ",".join(f"{k}={v}" for k, v in r["metric"].items() if k != "__name__")
-            values = [
-                (datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), float(val))
-                for ts, val in r["values"]
-            ]
+            values = []
+            for ts, val in r["values"]:
+                # Handle both Unix timestamps and ISO format timestamps
+                try:
+                    # Try Unix timestamp first
+                    timestamp = datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                except ValueError:
+                    # If that fails, try parsing as ISO format
+                    timestamp = ts  # Already in ISO format
+                values.append((timestamp, float(val)))
             result.append((name, labels, values))
     return result
 
@@ -481,6 +483,12 @@ def run_pipeline(data_dir: Path, validate_fn, test_name: str) -> tuple:
 
 
 def main():
+    # Parse command line arguments
+    custom_folder = None
+    if len(sys.argv) > 1:
+        custom_folder = sys.argv[1]
+        print(f"📁 Using custom test folder: {custom_folder}")
+    
     # Clear previous CSV so reruns produce a clean file
     csv_path = OUTPUT_DIR / "incidents.csv"
     if csv_path.exists():
@@ -488,18 +496,74 @@ def main():
 
     total_p = total_c = 0
 
-    p, c = run_pipeline(Path("data"), validate_original, "Original incident (v1 data, v2 schema)")
-    total_p += p; total_c += c
+    if custom_folder:
+        # Run pipeline on custom folder only
+        folder_path = Path(custom_folder)
+        if not folder_path.exists():
+            print(f"❌ Error: Folder {custom_folder} does not exist")
+            return
+        
+        # Generic validation for custom test cases
+        def validate_custom(result: dict) -> tuple:
+            return _run_checks([
+                ("has_incident_summary", bool(result.get("incident_summary", "").strip())),
+                ("has_affected_service", bool(result.get("affected_service", "").strip())),
+                ("has_severity", bool(result.get("severity", "").strip())),
+                ("has_timeline", bool(result.get("timeline", {}))),
+                ("has_root_cause", bool(result.get("root_cause", {}))),
+                ("has_customer_impact", bool(result.get("customer_impact", {}))),
+                ("has_resolution", bool(result.get("resolution", {}))),
+                ("confidence_scores_present", "confidence_scores" in result),
+                ("source_attribution_present", "source_attribution" in result),
+            ], f"Custom test case: {custom_folder}")
+        
+        p, c = run_pipeline(folder_path, validate_custom, f"Custom test case: {custom_folder}")
+        total_p += p; total_c += c
+    else:
+        # Run default test cases
+        p, c = run_pipeline(Path("data"), validate_original, "Original incident (v1 data, v2 schema)")
+        total_p += p; total_c += c
 
-    p, c = run_pipeline(Path("test_data_portal"), validate_portal, "Portal auth failure (synthetic)")
-    total_p += p; total_c += c
+        p, c = run_pipeline(Path("test_data_portal"), validate_portal, "Portal auth failure (synthetic)")
+        total_p += p; total_c += c
 
-    p, c = run_pipeline(Path("test_data_thirdparty"), validate_thirdparty, "Third-party dependency (synthetic)")
-    total_p += p; total_c += c
+        p, c = run_pipeline(Path("test_data_thirdparty"), validate_thirdparty, "Third-party dependency (synthetic)")
+        total_p += p; total_c += c
 
     print(f"\n{'='*55}")
     print(f"TOTAL: {total_p}/{total_c} checks passed across all 3 test cases")
     print(f"Outputs written to: {OUTPUT_DIR.resolve()}")
+    
+    # Automatically trigger communication generation
+    trigger_communication_generation()
+
+
+def trigger_communication_generation():
+    """Automatically trigger communication generation after analysis"""
+    try:
+        import subprocess
+        print("\n🚀 Triggering communication generation...")
+        
+        # Check if we're running with a custom folder
+        custom_folder = sys.argv[1] if len(sys.argv) > 1 else None
+        
+        # Build command with optional custom output directory
+        cmd = ["python", "generate_comms.py"]
+        if custom_folder:
+            # Use custom folder name for both input and output
+            cmd.append(f"comms_{custom_folder.replace('/', '_')}")
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=".")
+        if result.returncode == 0:
+            print("📝 Communications generated successfully")
+            if result.stdout:
+                print(result.stdout)
+        else:
+            print("⚠️  Communication generation failed")
+            if result.stderr:
+                print("Error:", result.stderr)
+    except Exception as e:
+        print(f"⚠️  Could not trigger communication generation: {e}")
 
 
 if __name__ == "__main__":

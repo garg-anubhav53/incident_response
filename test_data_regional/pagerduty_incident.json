@@ -1,0 +1,37 @@
+{
+  "incident": {
+    "id": "REG123",
+    "title": "High Error Rate in EU Region",
+    "severity": "SEV-2",
+    "status": "resolved",
+    "created_at": "2025-03-20T14:30:00Z",
+    "acknowledged_at": "2025-03-20T14:35:00Z",
+    "resolved_at": "2025-03-20T16:45:00Z",
+    "service": {
+      "name": "threat-detection-service",
+      "id": "svc-threat-detection"
+    },
+    "assignment_policy": {
+      "name": "Security Operations"
+    },
+    "urgency": "high",
+    "priority": "high"
+  },
+  "log_entries": [
+    {
+      "timestamp": "2025-03-20T14:30:00Z",
+      "message": "High error rate detected in threat-detection-service-eu-west-1",
+      "details": "Error rate exceeded 15% threshold"
+    },
+    {
+      "timestamp": "2025-03-20T14:35:00Z",
+      "message": "Incident acknowledged by security team",
+      "details": "Investigating regional infrastructure issue"
+    },
+    {
+      "timestamp": "2025-03-20T16:45:00Z",
+      "message": "Incident resolved",
+      "details": "Regional infrastructure restored"
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "logGroup": "/aws/threat-detection/eu-west-1",
+  "logStream": "threat-detection-service-eu-west-1-abc123",
+  "events": [
+    {
+      "timestamp": "2025-03-20T14:25:00Z",
+      "message": "ERROR: Database connection timeout in eu-west-1 cluster",
+      "fields": {
+        "region": "eu-west-1",
+        "service": "threat-detection",
+        "error_code": "DB_TIMEOUT",
+        "cluster": "threat-db-eu-west-1"
+      }
+    },
+    {
+      "timestamp": "2025-03-20T14:26:00Z",
+      "message": "WARNING: Retry attempts exhausted for database connections",
+      "fields": {
+        "region": "eu-west-1",
+        "service": "threat-detection",
+        "retry_count": "5",
+        "cluster": "threat-db-eu-west-1"
+      }
+    },
+    {
+      "timestamp": "2025-03-20T14:30:00Z",
+      "message": "ERROR: Failed to process threat data due to database unavailability",
+      "fields": {
+        "region": "eu-west-1",
+        "service": "threat-detection",
+        "affected_customers": "142",
+        "cluster": "threat-db-eu-west-1"
+      }
+    },
+    {
+      "timestamp": "2025-03-20T14:35:00Z",
+      "message": "INFO: Manual failover initiated for eu-west-1 database cluster",
+      "fields": {
+        "region": "eu-west-1",
+        "service": "threat-detection",
+        "action": "failover",
+        "cluster": "threat-db-eu-west-1"
+      }
+    },
+    {
+      "timestamp": "2025-03-20T16:40:00Z",
+      "message": "INFO: Database cluster restored to normal operation",
+      "fields": {
+        "region": "eu-west-1",
+        "service": "threat-detection",
+        "status": "healthy",
+        "cluster": "threat-db-eu-west-1"
+      }
+    },
+    {
+      "timestamp": "2025-03-20T16:45:00Z",
+      "message": "INFO: Threat processing resumed normal operation in eu-west-1",
+      "fields": {
+        "region": "eu-west-1",
+        "service": "threat-detection",
+        "throughput": "normal",
+        "error_rate": "0.2%"
+      }
+    }
+  ]
+}

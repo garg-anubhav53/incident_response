@@ -1,0 +1,25 @@
+{
+  "title": "Portal Login Issues",
+  "communications": [
+    {
+      "stage": "investigating",
+      "posted_at_pt": "2:15 AM PT",
+      "message": "We are investigating reports of customers unable to log into the security portal. Login attempts may fail with authentication errors. Our threat detection and email processing systems remain fully operational and continue protecting your environment. We are actively investigating the cause and will provide an update within 15 minutes."
+    },
+    {
+      "stage": "identified",
+      "posted_at_pt": "2:25 AM PT",
+      "message": "We have identified an issue with our authentication infrastructure that is preventing portal logins. Our team is working to restore service. Email threat detection and processing continue to operate normally\u2014your security coverage is not impacted. We expect to have the portal restored within 30 minutes and will provide another update shortly."
+    },
+    {
+      "stage": "monitoring",
+      "posted_at_pt": "2:50 AM PT",
+      "message": "Our team has implemented a fix and portal authentication is being restored. Login success rates are returning to normal levels. We are monitoring closely to ensure full stability. Threat detection remained fully operational throughout this incident."
+    },
+    {
+      "stage": "resolved",
+      "posted_at_pt": "3:05 AM PT",
+      "message": "This incident has been resolved. Portal login functionality is fully restored and operating normally. **Incident Summary:** Between approximately 2:10 AM PT and 3:00 AM PT (50 minutes), customers were unable to log into the security portal due to an authentication service issue. Email threat detection and processing operated without interruption throughout the incident. We apologize for any inconvenience this may have caused."
+    }
+  ]
+}

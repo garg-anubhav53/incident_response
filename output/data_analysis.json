@@ -1,5 +1,5 @@
 {
-  "incident_summary": "API gateway experienced severe latency degradation (p99 latency increased from 0.15s to 18s) due to database connection pool exhaustion caused by a configuration change that tripled HTTP client timeout, lasting approximately 2 hours and 25 minutes at SEV-2 severity",
+  "incident_summary": "API gateway experienced severe latency degradation (p99 15.2s vs baseline ~500ms) for approximately 2.5 hours due to database connection pool exhaustion triggered by a configuration change that tripled HTTP client timeout values.",
   "affected_service": "api-gateway",
   "affected_products": [
     "Customer-facing API"
@@ -7,84 +7,83 @@
   "severity": "SEV-2",
   "timeline": {
     "cause_time_utc": "2025-01-15T14:15:00Z",
-    "onset_time_utc": "2025-01-15T14:20:00Z",
+    "onset_time_utc": "2025-01-15T14:15:00Z",
     "detection_time_utc": "2025-01-15T14:23:00Z",
     "acknowledged_time_utc": "2025-01-15T14:25:00Z",
     "mitigation_time_utc": "2025-01-15T15:45:00Z",
-    "recovery_time_utc": "2025-01-15T15:00:00Z",
+    "recovery_time_utc": "2025-01-15T16:00:00Z",
     "resolved_time_utc": "2025-01-15T16:45:00Z"
   },
   "root_cause": {
-    "summary": "HTTP client timeout configuration change from 10s to 30s caused database connection pool exhaustion by holding connections 3x longer, preventing connection recycling",
+    "summary": "Configuration change increased HTTP client timeout from 10s to 30s, causing database connections to be held 3x longer and exhausting the fixed-size connection pool (50 connections).",
     "status": "confirmed",
-    "trigger": "Deployment at 2025-01-15T14:15:00Z increasing HTTP client timeout from 10s to 30s",
-    "mechanism": "Tripled timeout duration prevented connection pool from recycling connections fast enough; when pool reached maximum capacity (50/50), new requests queued for up to 30s waiting for available connections, causing cascading latency and timeout errors"
+    "trigger": "Deployment at 2025-01-15T14:15:00Z changing HTTP client timeout configuration from 10s to 30s",
+    "mechanism": "Longer timeout values caused database connections to remain active for extended periods. With a fixed pool size of 50 connections, the pool could not recycle connections fast enough to serve incoming request volume. Once exhausted, new requests waited up to 30 seconds for available connections, cascading into severe API latency."
   },
   "customer_impact": {
-    "description": "Customers experienced severe API performance degradation with response times increasing from normal sub-second levels to 15-18 seconds, along with intermittent timeout errors affecting API requests",
-    "severity_assessment": "partial_outage",
+    "description": "Customers experienced significantly slower API response times, with requests taking up to 15+ seconds instead of the normal sub-second response. Some requests may have timed out entirely if client-side timeouts were shorter than 15 seconds.",
+    "severity_assessment": "degraded_performance",
     "affected_functionality": [
       "API request processing",
-      "Database-dependent operations"
+      "All API-dependent operations"
     ],
     "unaffected_functionality": []
   },
   "resolution": {
-    "action_taken": "Emergency rollback of configuration change, reverting HTTP client timeout from 30s back to 10s",
-    "confirmed_by": "Metrics showed connection pool utilization dropped from 100% to 60% baseline, p99 latency recovered to 0.18s by 15:00 UTC, 500 errors ceased, CloudWatch logs showed 'Database connection pool recovered' at 15:05 UTC"
+    "action_taken": "Rolled back the configuration change by reverting HTTP client timeout from 30s back to 10s at 2025-01-15T15:45:00Z",
+    "confirmed_by": "Connection pool utilization dropped to 60% (from 100%), p99 latency returned to baseline ~500ms by 16:00 UTC, CloudWatch logs showed 'Database connection pool recovered' at 15:05 UTC"
   },
   "confidence_scores": {
     "root_cause": "high",
     "scope": "medium",
     "timeline": "high",
-    "customer_impact": "high"
+    "customer_impact": "medium"
   },
   "source_attribution": {
     "root_cause": [
-      "Slack thread engineer confirmation at 2:37 PM and 2:40 PM identifying PR #12345 as cause",
-      "GitHub deployment showing timeout change from 10s to 30s at 14:15 UTC",
-      "Rollback deployment at 15:45 UTC with description 'Emergency rollback of PR #12345 due to database connection pool exhaustion'",
-      "Metrics showing recovery after rollback"
+      "GitHub deployment at 14:15:00Z to api-gateway",
+      "Slack thread engineer confirmation 'Found it! PR #12345... Changed HTTP client timeout from 10s to 30s'",
+      "Slack explanation 'Connection pool can't recycle fast enough with the longer timeout'",
+      "Rollback deployment description 'Emergency rollback... due to database connection pool exhaustion'"
     ],
     "timeline": [
-      "Prometheus metrics showing p99 latency anomaly start at 14:20 UTC",
-      "PagerDuty alert trigger at 14:23 UTC",
-      "GitHub deployment timestamp 14:15 UTC",
-      "Rollback deployment timestamp 15:45 UTC",
-      "Metrics recovery at 15:00 UTC",
-      "CloudWatch log recovery message at 15:05 UTC",
-      "PagerDuty resolution at 16:45 UTC"
+      "PagerDuty alert trigger 14:23:00Z",
+      "GitHub deployment timestamp 14:15:00Z",
+      "CloudWatch first error log 14:23:15Z",
+      "Slack rollback initiation 14:45 PM (~14:45:00Z)",
+      "Slack rollback complete 3:00 PM (~15:00:00Z)",
+      "GitHub rollback deployment 15:45:00Z",
+      "Slack monitoring complete 4:45 PM (~16:45:00Z)",
+      "PagerDuty resolved 16:45:00Z"
     ],
     "customer_impact": [
-      "Prometheus metrics showing p99 latency peak of 18s (120x baseline)",
-      "500 error rate peak of 120/interval (baseline 0)",
-      "CloudWatch logs showing connection timeout errors",
-      "Median latency also degraded to 1.5s (30x baseline)"
+      "PagerDuty alert 'p99 latency > 5s (actual: 15.2s)'",
+      "CloudWatch logs showing 30-second connection wait times",
+      "Slack engineer assessment of cascading timeouts"
     ]
   },
   "data_gaps": [
-    "Scope limited to api-gateway service only - no data on whether other services or regions were affected",
-    "No data on percentage of requests affected or total customer count impacted",
-    "Timeline discrepancy: metrics show recovery at 15:00 UTC but rollback deployed at 15:45 UTC - unclear why recovery preceded rollback deployment",
-    "No data on what specific customer-facing products depend on api-gateway",
-    "Connection pool utilization metric shows stable 0.61 baseline in summary but raw values show spike to 1.0 (100%) - inconsistency in metric reporting"
+    "Exact customer request failure rate unknown - only latency metrics available, unclear how many requests actually failed vs. succeeded slowly",
+    "Geographic/regional scope unconfirmed - data does not indicate whether all regions were affected or only specific deployments",
+    "Baseline request volume unknown - cannot determine if traffic spike contributed or if purely configuration-driven",
+    "Recovery timing ambiguous - CloudWatch shows pool recovery at 15:05 UTC but rollback deployed at 15:45 UTC, suggesting partial self-recovery before mitigation",
+    "Customer-facing product names unknown - only 'api-gateway' service identified, unclear which specific SaaS products depend on this API"
   ],
   "internal_details_to_exclude": [
     "alice.engineer@example.com",
     "john.dev@example.com",
-    "jane.dev@example.com",
     "bob.sre@example.com",
+    "jane.dev@example.com",
     "rds-prod-main",
     "PR #12345",
     "PR #12340",
     "PR #12347",
-    "commit SHA abc123",
-    "commit SHA def456",
-    "commit SHA xyz789",
+    "commit_sha: abc123",
+    "commit_sha: def456",
+    "commit_sha: xyz789",
     "#incidents Slack channel",
     "api-gateway/config/http_client.yaml file path",
-    "notification-service deployment details",
-    "CloudWatch specific log context fields",
-    "Prometheus metric label details"
+    "notification-service (unrelated deployment)",
+    "PagerDuty incident ID PXXX123"
   ]
 }

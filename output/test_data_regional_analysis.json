@@ -1,0 +1,88 @@
+{
+  "incident_summary": "Database connection pool configuration change caused threat detection service degradation in EU region for approximately 2 hours 20 minutes at SEV-2 severity, resulting in delayed threat processing for 142 customers",
+  "affected_service": "threat-detection-service",
+  "affected_products": [
+    "Threat Detection"
+  ],
+  "severity": "SEV-2",
+  "timeline": {
+    "cause_time_utc": "2025-03-20T14:10:00Z",
+    "onset_time_utc": "2025-03-20T14:25:00Z",
+    "detection_time_utc": "2025-03-20T14:30:00Z",
+    "acknowledged_time_utc": "2025-03-20T14:35:00Z",
+    "mitigation_time_utc": "2025-03-20T14:35:00Z",
+    "recovery_time_utc": "2025-03-20T16:45:00Z",
+    "resolved_time_utc": "2025-03-20T16:45:00Z"
+  },
+  "root_cause": {
+    "summary": "Database connection pool configuration change deployed at 14:10 UTC did not account for regional infrastructure connection limits in EU region, causing connection pool exhaustion",
+    "status": "confirmed",
+    "trigger": "Production deployment of database connection pool configuration update completed at 14:10 UTC",
+    "mechanism": "Updated connection timeout settings (5s to 30s) and retry logic caused connection pool exhaustion in EU region database cluster due to regional infrastructure connection limits, leading to database timeouts and failed threat processing"
+  },
+  "customer_impact": {
+    "description": "Customers in the EU region experienced significant delays in threat detection and processing. Security threats were still being detected and queued but processed much slower than normal. No threats were missed and no data was lost.",
+    "severity_assessment": "partial_outage",
+    "affected_functionality": [
+      "Threat detection processing speed in EU region",
+      "Real-time threat analysis in EU region"
+    ],
+    "unaffected_functionality": [
+      "Threat detection in US and Asia-Pacific regions",
+      "Threat queuing and eventual processing",
+      "Data integrity"
+    ]
+  },
+  "resolution": {
+    "action_taken": "Manual failover initiated to backup database cluster at 14:35 UTC, followed by connection pool settings adjustment for regional infrastructure limits at 16:35 UTC",
+    "confirmed_by": "CloudWatch logs showing database cluster healthy status at 16:40 UTC, error rate returned to baseline 0.6% at 16:45 UTC, throughput restored to 1.24e+03 at 16:45 UTC"
+  },
+  "confidence_scores": {
+    "root_cause": "high",
+    "scope": "high",
+    "timeline": "high",
+    "customer_impact": "high"
+  },
+  "source_attribution": {
+    "root_cause": [
+      "Slack thread confirmation by alice.sre at 16:45 UTC",
+      "GitHub deployment at 14:10 UTC to threat-detection-service",
+      "CloudWatch logs showing DB_TIMEOUT errors starting 14:25 UTC",
+      "Slack discussion by charlie.infra at 14:35 UTC linking deployment to issue"
+    ],
+    "timeline": [
+      "Prometheus metrics showing error rate anomaly start at 14:25 UTC",
+      "CloudWatch first error log at 14:25 UTC",
+      "PagerDuty alert at 14:30 UTC",
+      "Slack acknowledgment at 14:35 UTC",
+      "CloudWatch failover log at 14:35 UTC",
+      "CloudWatch recovery log at 16:40 UTC",
+      "Prometheus metrics recovery at 16:45 UTC",
+      "PagerDuty resolution at 16:45 UTC"
+    ],
+    "customer_impact": [
+      "CloudWatch log at 14:30 UTC showing 142 affected customers",
+      "Slack messages by bob.security at 14:45 UTC and 15:30 UTC describing delayed threat processing",
+      "Prometheus metrics showing EU region only affected, US region stable"
+    ]
+  },
+  "data_gaps": [
+    "Exact number of threats delayed or queued during incident",
+    "Maximum delay time experienced by customers",
+    "Whether Asia-Pacific region (ap-southeast-2) mentioned in Slack was also confirmed unaffected in metrics data",
+    "Specific connection limit values for EU regional infrastructure",
+    "Whether rollback was considered or only failover/adjustment approach used"
+  ],
+  "internal_details_to_exclude": [
+    "threat-db-eu-west-1 cluster name",
+    "threat-detection-service-eu-west-1-abc123 log stream",
+    "deploy_789 deployment ID",
+    "abc123def456 commit SHA",
+    "company/threat-detection-service repository name",
+    "infra@company.com email",
+    "#incidents Slack channel",
+    "alice.sre, bob.security, charlie.infra engineer names",
+    "config/database.yml and src/db/connection.py file paths",
+    "13:45 PT deployment time reference"
+  ]
+}

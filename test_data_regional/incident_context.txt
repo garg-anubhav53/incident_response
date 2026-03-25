@@ -1,0 +1,37 @@
+# EU Region Database Incident - Slack Thread
+
+## Channel: #incidents
+## Date: March 20, 2025
+
+**alice.sre** [2:30 PM]: 
+🚨 High error rate detected in threat-detection-service-eu-west-1. Error rate at 18.5%, normally <1%. Seeing database connection timeouts.
+
+**bob.security** [2:32 PM]: 
+Acknowledged. Checking the EU database cluster health. Can confirm other regions (us-east-1, ap-southeast-2) are operating normally.
+
+**charlie.infra** [2:35 PM]: 
+EU database cluster showing connection pool exhaustion. Recent deploy at 13:45 PT might have affected connection settings. Investigating the deployment changes.
+
+**alice.sre** [2:40 PM]: 
+Confirmed - the database connection pool update seems to have caused issues in EU region only. Other regions unaffected. Initiating manual failover to backup cluster.
+
+**bob.security** [2:45 PM]: 
+Customer impact: ~142 customers in EU region experiencing delayed threat processing. Detection still working but with significant delays. No security risk - threats are queued.
+
+**charlie.infra** [2:50 PM]: 
+Failover initiated. EU traffic now routing to backup cluster. Monitoring recovery. Original deployment didn't account for regional database connection limits.
+
+**alice.sre** [3:15 PM]: 
+Error rates improving but still elevated at ~8%. Backup cluster handling load but showing strain. Need to optimize connection settings.
+
+**bob.security** [3:30 PM]: 
+Customer impact update: EU customers still experiencing delays but service is functional. No data loss. All threats being processed, just slower than normal.
+
+**charlie.infra** [4:35 PM]: 
+Database cluster restored to healthy state. Connection pool settings adjusted for regional limits. All systems back to normal operation.
+
+**alice.sre** [4:45 PM]: 
+Confirmed - EU region error rate back to 0.6%, throughput restored. Incident resolved. Root cause confirmed as database connection pool configuration change that didn't account for regional infrastructure differences.
+
+**bob.security** [4:50 PM]: 
+Post-incident review scheduled. Need to add regional testing to deployment pipeline. All customer services fully restored.

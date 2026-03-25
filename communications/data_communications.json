@@ -1,0 +1,25 @@
+{
+  "title": "API Performance Degradation",
+  "communications": [
+    {
+      "stage": "investigating",
+      "posted_at_pt": "6:25 AM PT",
+      "message": "We are investigating reports of slow API response times and intermittent service errors. Our team is actively working to identify the cause and restore normal performance. API requests are processing but may experience significant delays. We will provide an update within 30 minutes."
+    },
+    {
+      "stage": "identified",
+      "posted_at_pt": "6:50 AM PT",
+      "message": "We have identified the cause of the API performance issues as a configuration change that is preventing our systems from efficiently managing connections. Response times are currently up to 120 times slower than normal, and some requests are returning errors. Our team is implementing a fix and expects to see improvement within 30 minutes. Next update in 20 minutes."
+    },
+    {
+      "stage": "monitoring",
+      "posted_at_pt": "7:10 AM PT",
+      "message": "The configuration fix has been applied and we are seeing significant improvement. API response times are returning to normal levels and error rates have decreased substantially. We are continuing to monitor system performance closely to ensure full stability before marking this incident resolved. Next update in 30 minutes."
+    },
+    {
+      "stage": "resolved",
+      "posted_at_pt": "8:45 AM PT",
+      "message": "This incident has been resolved. API performance has returned to normal levels and all services are operating as expected. We apologize for any inconvenience this may have caused.\n\nIncident Summary:\n- Start time: Approximately 6:20 AM PT\n- Resolution time: 8:45 AM PT\n- Duration: ~2 hours 25 minutes\n- Impact: Customers experienced severely degraded API response times and intermittent service errors during this period"
+    }
+  ]
+}
