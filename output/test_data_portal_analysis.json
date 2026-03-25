@@ -1,0 +1,84 @@
+{
+  "incident_summary": "Portal authentication service experienced a full outage for approximately 50 minutes due to session-service-prod becoming unreachable, preventing customer logins while core threat detection remained operational",
+  "affected_service": "portal-auth-service",
+  "affected_products": [
+    "Customer Portal (login/authentication only)"
+  ],
+  "severity": "SEV-3",
+  "timeline": {
+    "cause_time_utc": null,
+    "onset_time_utc": "2025-02-10T09:10:00Z",
+    "detection_time_utc": "2025-02-10T09:15:00Z",
+    "acknowledged_time_utc": "2025-02-10T09:18:00Z",
+    "mitigation_time_utc": "2025-02-10T09:45:00Z",
+    "recovery_time_utc": "2025-02-10T10:00:00Z",
+    "resolved_time_utc": "2025-02-10T10:05:00Z"
+  },
+  "root_cause": {
+    "summary": "session-service-prod became unreachable, blocking SSO token validation required for portal authentication",
+    "status": "confirmed",
+    "trigger": "session-service-prod service failure",
+    "mechanism": "Portal auth service depends on session-service-prod for SSO token validation; when session service became unreachable at internal endpoint, all authentication requests failed"
+  },
+  "customer_impact": {
+    "description": "Customers were unable to log into the security portal for approximately 50 minutes. All login attempts failed during this period. Email threat detection and processing continued operating normally throughout the incident.",
+    "severity_assessment": "full_outage",
+    "affected_functionality": [
+      "Portal login and authentication",
+      "Access to portal dashboard and UI"
+    ],
+    "unaffected_functionality": [
+      "Email threat detection and processing (IES pipeline confirmed operational)"
+    ]
+  },
+  "resolution": {
+    "action_taken": "Restarted session-service-prod pod at 09:45 UTC",
+    "confirmed_by": "CloudWatch log message 'session-service-prod connection restored, auth requests resuming' at 10:00 UTC; Prometheus metrics showing portal_auth_response_latency_seconds returned to baseline 0.22s at 10:00 UTC; engineer confirmation 'portal fully accessible again' at 10:05 UTC"
+  },
+  "confidence_scores": {
+    "root_cause": "high",
+    "scope": "high",
+    "timeline": "high",
+    "customer_impact": "high"
+  },
+  "source_attribution": {
+    "root_cause": [
+      "CloudWatch logs showing repeated 'session-service-prod unreachable' errors starting 09:10 UTC",
+      "Slack message from bob.sre at 09:20: 'logs show session-service-prod is unreachable, that's the auth backend'",
+      "Resolution confirmed by pod restart followed by service restoration"
+    ],
+    "timeline": [
+      "onset_time: First CloudWatch ERROR log at 09:10:00Z",
+      "detection_time: PagerDuty alert trigger at 09:15:00Z",
+      "acknowledged_time: PagerDuty acknowledgment at 09:18:00Z",
+      "mitigation_time: CloudWatch INFO log 'Restarting session-service-prod pod' at 09:45:00Z",
+      "recovery_time: CloudWatch INFO log 'connection restored' and Prometheus metrics baseline recovery at 10:00:00Z",
+      "resolved_time: PagerDuty resolution at 10:05:00Z"
+    ],
+    "customer_impact": [
+      "Slack messages from carol.dev at 09:14: 'getting SSO failures on login page - portal is down'",
+      "Slack message from bob.sre at 09:15: 'IES detection is still running - emails are being processed normally'",
+      "Slack message from bob.sre at 10:05: 'Detection was unaffected the entire time - only portal login was impacted'",
+      "Prometheus metrics showing ies_emails_processed_total remained stable at baseline ~4.5e+03 throughout incident",
+      "Prometheus metrics showing portal_auth_response_latency_seconds spiked from 0.2s baseline to 9.5-14s during incident"
+    ]
+  },
+  "data_gaps": [
+    "Root cause of why session-service-prod became unreachable is not explained in available data - only that it failed and required restart",
+    "Geographic scope unknown - logs reference 'prod-us-east-1' but no confirmation whether other regions were affected or if service is single-region",
+    "Number of affected customers or failed login attempts not quantified",
+    "Whether session-service-prod experienced a crash, network partition, resource exhaustion, or other specific failure mode is not documented"
+  ],
+  "internal_details_to_exclude": [
+    "bob.sre@example.com",
+    "carol.dev@example.com",
+    "session-service-prod",
+    "session-service-prod.internal:8080",
+    "prod-us-east-1",
+    "portal-auth-service (internal service name)",
+    "ies-pipeline (internal service name)",
+    "commit abc1234",
+    "Slack channel thread",
+    "/aws/portal-auth-service log group"
+  ]
+}

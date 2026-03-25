@@ -1,0 +1,82 @@
+{
+  "incident_summary": "Remediation service experienced complete failure of automated remediation actions for approximately 2.5 hours due to Microsoft Graph API outage, with SEV-2 severity",
+  "affected_service": "remediation-service",
+  "affected_products": [
+    "Automated Remediation"
+  ],
+  "severity": "SEV-2",
+  "timeline": {
+    "cause_time_utc": "2025-02-15T16:25:00Z",
+    "onset_time_utc": "2025-02-15T16:25:00Z",
+    "detection_time_utc": "2025-02-15T16:30:00Z",
+    "acknowledged_time_utc": "2025-02-15T16:33:00Z",
+    "mitigation_time_utc": "2025-02-15T18:55:00Z",
+    "recovery_time_utc": "2025-02-15T19:00:00Z",
+    "resolved_time_utc": "2025-02-15T19:00:00Z"
+  },
+  "root_cause": {
+    "summary": "Microsoft Graph API outage caused all remediation actions requiring Microsoft Graph integration to fail with 503 errors",
+    "status": "confirmed",
+    "trigger": "Microsoft Graph API service degradation (graph.microsoft.com returning HTTP 503)",
+    "mechanism": "Remediation service depends on Microsoft Graph API for executing remediation actions; when Graph API became unavailable, all dependent remediation actions failed and queued, causing action latency to spike from 1.5s baseline to 48-62s and error rate to exceed 80%"
+  },
+  "customer_impact": {
+    "description": "Customers experienced complete failure of automated remediation actions for detected threats. While threat detection continued normally, any automated responses requiring Microsoft Graph integration (such as user account actions, mailbox operations, or Microsoft 365 security controls) could not execute and were queued for later processing",
+    "severity_assessment": "partial_outage",
+    "affected_functionality": [
+      "Automated remediation actions requiring Microsoft Graph API",
+      "Real-time threat response automation"
+    ],
+    "unaffected_functionality": [
+      "Threat detection and analysis (IES email security pipeline)",
+      "Security event monitoring",
+      "Manual remediation capabilities"
+    ]
+  },
+  "resolution": {
+    "action_taken": "No internal action required \u2014 incident resolved when Microsoft restored Graph API service availability",
+    "confirmed_by": "CloudWatch logs showing HTTP 200 responses from graph.microsoft.com at 18:55 UTC; remediation action latency returned to 1.7s baseline by 19:00 UTC; backlog processing confirmed in logs at 18:58 UTC"
+  },
+  "confidence_scores": {
+    "root_cause": "high",
+    "scope": "high",
+    "timeline": "high",
+    "customer_impact": "high"
+  },
+  "source_attribution": {
+    "root_cause": [
+      "CloudWatch logs showing consistent HTTP 503 errors from graph.microsoft.com starting 16:25 UTC",
+      "Slack thread confirmation by engineer at 16:35 UTC and 16:40 UTC referencing Microsoft status page",
+      "PagerDuty resolution message stating 'Microsoft Graph API restored'"
+    ],
+    "timeline": [
+      "Onset: CloudWatch first ERROR at 16:25:00Z",
+      "Detection: PagerDuty alert trigger at 16:30:00Z, Prometheus anomaly start at 16:30:00Z",
+      "Acknowledged: PagerDuty at 16:33:00Z",
+      "Mitigation: CloudWatch INFO message at 18:55:00Z, Slack confirmation at 18:55",
+      "Recovery: Prometheus latency returned to baseline at 19:00:00Z, PagerDuty resolved at 19:00:00Z"
+    ],
+    "customer_impact": [
+      "Slack thread at 16:38 confirming 'detection still working fine, IES email security is unaffected. Only remediation actions are delayed'",
+      "Prometheus metrics showing ies_detection_throughput stable throughout incident",
+      "PagerDuty alert showing >80% error rate for remediation actions"
+    ]
+  },
+  "data_gaps": [
+    "Exact number of failed/queued remediation actions during the outage",
+    "Specific types of remediation actions affected (user actions, mailbox operations, etc.)",
+    "Number of customers impacted",
+    "Whether any manual workarounds were communicated to customers during the outage",
+    "Time to fully clear the backlog after recovery (logs show draining at 18:58 but completion time unknown)"
+  ],
+  "internal_details_to_exclude": [
+    "alice.engineer@example.com",
+    "bob.sre",
+    "prod-us-east-1",
+    "def5678",
+    "/aws/remediation-service",
+    "Slack usernames @alice.engineer and @bob.sre",
+    "graph.microsoft.com (internal API endpoint reference)",
+    "us-east-1 region identifier"
+  ]
+}

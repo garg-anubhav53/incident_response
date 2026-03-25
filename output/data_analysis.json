@@ -1,0 +1,90 @@
+{
+  "incident_summary": "API gateway experienced severe latency degradation (p99 latency increased from 0.15s to 18s) due to database connection pool exhaustion caused by a configuration change that tripled HTTP client timeout, lasting approximately 2 hours and 25 minutes at SEV-2 severity",
+  "affected_service": "api-gateway",
+  "affected_products": [
+    "Customer-facing API"
+  ],
+  "severity": "SEV-2",
+  "timeline": {
+    "cause_time_utc": "2025-01-15T14:15:00Z",
+    "onset_time_utc": "2025-01-15T14:20:00Z",
+    "detection_time_utc": "2025-01-15T14:23:00Z",
+    "acknowledged_time_utc": "2025-01-15T14:25:00Z",
+    "mitigation_time_utc": "2025-01-15T15:45:00Z",
+    "recovery_time_utc": "2025-01-15T15:00:00Z",
+    "resolved_time_utc": "2025-01-15T16:45:00Z"
+  },
+  "root_cause": {
+    "summary": "HTTP client timeout configuration change from 10s to 30s caused database connection pool exhaustion by holding connections 3x longer, preventing connection recycling",
+    "status": "confirmed",
+    "trigger": "Deployment at 2025-01-15T14:15:00Z increasing HTTP client timeout from 10s to 30s",
+    "mechanism": "Tripled timeout duration prevented connection pool from recycling connections fast enough; when pool reached maximum capacity (50/50), new requests queued for up to 30s waiting for available connections, causing cascading latency and timeout errors"
+  },
+  "customer_impact": {
+    "description": "Customers experienced severe API performance degradation with response times increasing from normal sub-second levels to 15-18 seconds, along with intermittent timeout errors affecting API requests",
+    "severity_assessment": "partial_outage",
+    "affected_functionality": [
+      "API request processing",
+      "Database-dependent operations"
+    ],
+    "unaffected_functionality": []
+  },
+  "resolution": {
+    "action_taken": "Emergency rollback of configuration change, reverting HTTP client timeout from 30s back to 10s",
+    "confirmed_by": "Metrics showed connection pool utilization dropped from 100% to 60% baseline, p99 latency recovered to 0.18s by 15:00 UTC, 500 errors ceased, CloudWatch logs showed 'Database connection pool recovered' at 15:05 UTC"
+  },
+  "confidence_scores": {
+    "root_cause": "high",
+    "scope": "medium",
+    "timeline": "high",
+    "customer_impact": "high"
+  },
+  "source_attribution": {
+    "root_cause": [
+      "Slack thread engineer confirmation at 2:37 PM and 2:40 PM identifying PR #12345 as cause",
+      "GitHub deployment showing timeout change from 10s to 30s at 14:15 UTC",
+      "Rollback deployment at 15:45 UTC with description 'Emergency rollback of PR #12345 due to database connection pool exhaustion'",
+      "Metrics showing recovery after rollback"
+    ],
+    "timeline": [
+      "Prometheus metrics showing p99 latency anomaly start at 14:20 UTC",
+      "PagerDuty alert trigger at 14:23 UTC",
+      "GitHub deployment timestamp 14:15 UTC",
+      "Rollback deployment timestamp 15:45 UTC",
+      "Metrics recovery at 15:00 UTC",
+      "CloudWatch log recovery message at 15:05 UTC",
+      "PagerDuty resolution at 16:45 UTC"
+    ],
+    "customer_impact": [
+      "Prometheus metrics showing p99 latency peak of 18s (120x baseline)",
+      "500 error rate peak of 120/interval (baseline 0)",
+      "CloudWatch logs showing connection timeout errors",
+      "Median latency also degraded to 1.5s (30x baseline)"
+    ]
+  },
+  "data_gaps": [
+    "Scope limited to api-gateway service only - no data on whether other services or regions were affected",
+    "No data on percentage of requests affected or total customer count impacted",
+    "Timeline discrepancy: metrics show recovery at 15:00 UTC but rollback deployed at 15:45 UTC - unclear why recovery preceded rollback deployment",
+    "No data on what specific customer-facing products depend on api-gateway",
+    "Connection pool utilization metric shows stable 0.61 baseline in summary but raw values show spike to 1.0 (100%) - inconsistency in metric reporting"
+  ],
+  "internal_details_to_exclude": [
+    "alice.engineer@example.com",
+    "john.dev@example.com",
+    "jane.dev@example.com",
+    "bob.sre@example.com",
+    "rds-prod-main",
+    "PR #12345",
+    "PR #12340",
+    "PR #12347",
+    "commit SHA abc123",
+    "commit SHA def456",
+    "commit SHA xyz789",
+    "#incidents Slack channel",
+    "api-gateway/config/http_client.yaml file path",
+    "notification-service deployment details",
+    "CloudWatch specific log context fields",
+    "Prometheus metric label details"
+  ]
+}

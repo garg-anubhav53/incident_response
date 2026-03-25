@@ -1,9 +1,12 @@
+import csv
 import os
 import json
 from pathlib import Path
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from anthropic import Anthropic
+
+OUTPUT_DIR = Path("output")
 
 load_dotenv()
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -354,6 +357,105 @@ def validate_thirdparty(result: dict) -> tuple:
     ], "Test B — Third-party Dependency")
 
 
+# ── Output writers ─────────────────────────────────────────────────────────────
+
+# CSV columns consumed by the communication drafter (next pipeline step).
+# Lists are semicolon-joined so a single cell stays readable and splittable.
+_CSV_COLUMNS = [
+    "source_dir",
+    "incident_summary",
+    "affected_service",
+    "affected_products",       # list → semicolon-joined
+    "severity",
+    "cause_time_utc",
+    "onset_time_utc",
+    "detection_time_utc",
+    "mitigation_time_utc",
+    "recovery_time_utc",
+    "resolved_time_utc",
+    "root_cause_summary",
+    "root_cause_status",       # confirmed | hypothesized | unknown
+    "root_cause_trigger",
+    "customer_impact_description",
+    "severity_assessment",     # degraded_performance | partial_outage | full_outage
+    "affected_functionality",  # list → semicolon-joined
+    "unaffected_functionality",# list → semicolon-joined
+    "resolution_action",
+    "resolution_confirmed_by",
+    "confidence_root_cause",
+    "confidence_scope",
+    "confidence_timeline",
+    "confidence_customer_impact",
+    "data_gaps",               # list → semicolon-joined
+    "internal_details_to_exclude",  # list → semicolon-joined
+]
+
+
+def _join(value) -> str:
+    """Flatten a list to a semicolon-joined string; pass scalars through."""
+    if isinstance(value, list):
+        return "; ".join(str(v) for v in value)
+    return "" if value is None else str(value)
+
+
+def write_outputs(result: dict, source_dir: str) -> None:
+    """Write per-incident JSON and append a row to the shared incidents CSV."""
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    slug = source_dir.replace("/", "_").strip("_")
+
+    # Full structured JSON — comm drafter can load this directly for rich context
+    json_path = OUTPUT_DIR / f"{slug}_analysis.json"
+    json_path.write_text(json.dumps(result, indent=2))
+
+    # Flat CSV row — one row per incident, all incidents in one file
+    csv_path = OUTPUT_DIR / "incidents.csv"
+    write_header = not csv_path.exists()
+
+    tl = result.get("timeline", {})
+    rc = result.get("root_cause", {})
+    ci = result.get("customer_impact", {})
+    res = result.get("resolution", {})
+    cs = result.get("confidence_scores", {})
+
+    row = {
+        "source_dir": source_dir,
+        "incident_summary": result.get("incident_summary", ""),
+        "affected_service": result.get("affected_service", ""),
+        "affected_products": _join(result.get("affected_products", [])),
+        "severity": result.get("severity", ""),
+        "cause_time_utc": tl.get("cause_time_utc", ""),
+        "onset_time_utc": tl.get("onset_time_utc", ""),
+        "detection_time_utc": tl.get("detection_time_utc", ""),
+        "mitigation_time_utc": tl.get("mitigation_time_utc", ""),
+        "recovery_time_utc": tl.get("recovery_time_utc", ""),
+        "resolved_time_utc": tl.get("resolved_time_utc", ""),
+        "root_cause_summary": rc.get("summary", ""),
+        "root_cause_status": rc.get("status", ""),
+        "root_cause_trigger": _join(rc.get("trigger")),
+        "customer_impact_description": ci.get("description", ""),
+        "severity_assessment": ci.get("severity_assessment", ""),
+        "affected_functionality": _join(ci.get("affected_functionality", [])),
+        "unaffected_functionality": _join(ci.get("unaffected_functionality", [])),
+        "resolution_action": res.get("action_taken", ""),
+        "resolution_confirmed_by": res.get("confirmed_by", ""),
+        "confidence_root_cause": cs.get("root_cause", ""),
+        "confidence_scope": cs.get("scope", ""),
+        "confidence_timeline": cs.get("timeline", ""),
+        "confidence_customer_impact": cs.get("customer_impact", ""),
+        "data_gaps": _join(result.get("data_gaps", [])),
+        "internal_details_to_exclude": _join(result.get("internal_details_to_exclude", [])),
+    }
+
+    with csv_path.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=_CSV_COLUMNS)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
+
+    print(f"  → JSON: {json_path}")
+    print(f"  → CSV row appended: {csv_path}")
+
+
 # ── Runner ─────────────────────────────────────────────────────────────────────
 
 def run_pipeline(data_dir: Path, validate_fn, test_name: str) -> tuple:
@@ -373,10 +475,17 @@ def run_pipeline(data_dir: Path, validate_fn, test_name: str) -> tuple:
     print("\n── Analysis ──")
     print(json.dumps(result, indent=2))
 
+    write_outputs(result, str(data_dir))
+
     return validate_fn(result)
 
 
 def main():
+    # Clear previous CSV so reruns produce a clean file
+    csv_path = OUTPUT_DIR / "incidents.csv"
+    if csv_path.exists():
+        csv_path.unlink()
+
     total_p = total_c = 0
 
     p, c = run_pipeline(Path("data"), validate_original, "Original incident (v1 data, v2 schema)")
@@ -390,6 +499,7 @@ def main():
 
     print(f"\n{'='*55}")
     print(f"TOTAL: {total_p}/{total_c} checks passed across all 3 test cases")
+    print(f"Outputs written to: {OUTPUT_DIR.resolve()}")
 
 
 if __name__ == "__main__":
