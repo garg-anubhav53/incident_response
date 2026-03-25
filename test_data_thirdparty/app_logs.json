@@ -1,0 +1,13 @@
+{
+  "logGroup": "/aws/remediation-service",
+  "logStream": "prod-us-east-1",
+  "events": [
+    {"timestamp": "2025-02-15T16:25:00Z", "level": "ERROR", "message": "HTTP 503 from graph.microsoft.com: Service Unavailable"},
+    {"timestamp": "2025-02-15T16:25:10Z", "level": "ERROR", "message": "OAuth token refresh failed for Microsoft Graph API: upstream returned 503"},
+    {"timestamp": "2025-02-15T16:26:00Z", "level": "ERROR", "message": "HTTP 503 from graph.microsoft.com: Service Unavailable"},
+    {"timestamp": "2025-02-15T16:27:00Z", "level": "ERROR", "message": "Remediation action failed: cannot call Microsoft Graph API, retrying"},
+    {"timestamp": "2025-02-15T16:30:00Z", "level": "ERROR", "message": "HTTP 503 from graph.microsoft.com: Service Unavailable (repeated x47)"},
+    {"timestamp": "2025-02-15T18:55:00Z", "level": "INFO", "message": "Microsoft Graph API responding normally (HTTP 200), remediation actions resuming"},
+    {"timestamp": "2025-02-15T18:58:00Z", "level": "INFO", "message": "Backlogged remediation actions draining successfully"}
+  ]
+}

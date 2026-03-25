@@ -1,0 +1,13 @@
+{
+  "deployments": [],
+  "recent_commits": [
+    {
+      "ref": "main",
+      "commit": "abc1234",
+      "timestamp": "2025-02-08T11:00:00Z",
+      "message": "Fix UI styling on login page",
+      "author": "carol.dev@example.com",
+      "service": "portal-frontend"
+    }
+  ]
+}

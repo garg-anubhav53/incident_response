@@ -1,0 +1,30 @@
+{
+  "metrics": [
+    {
+      "metric_name": "portal_auth_response_latency_seconds",
+      "labels": {"service": "portal-auth-service", "quantile": "0.99"},
+      "values": [
+        {"timestamp": "2025-02-10T09:05:00Z", "value": 0.2},
+        {"timestamp": "2025-02-10T09:10:00Z", "value": 0.21},
+        {"timestamp": "2025-02-10T09:15:00Z", "value": 9.5},
+        {"timestamp": "2025-02-10T09:30:00Z", "value": 14.0},
+        {"timestamp": "2025-02-10T09:45:00Z", "value": 11.2},
+        {"timestamp": "2025-02-10T10:00:00Z", "value": 0.22},
+        {"timestamp": "2025-02-10T10:05:00Z", "value": 0.20}
+      ]
+    },
+    {
+      "metric_name": "ies_emails_processed_total",
+      "labels": {"service": "ies-pipeline", "region": "us"},
+      "values": [
+        {"timestamp": "2025-02-10T09:05:00Z", "value": 4500},
+        {"timestamp": "2025-02-10T09:10:00Z", "value": 4485},
+        {"timestamp": "2025-02-10T09:15:00Z", "value": 4510},
+        {"timestamp": "2025-02-10T09:30:00Z", "value": 4495},
+        {"timestamp": "2025-02-10T09:45:00Z", "value": 4502},
+        {"timestamp": "2025-02-10T10:00:00Z", "value": 4498},
+        {"timestamp": "2025-02-10T10:05:00Z", "value": 4505}
+      ]
+    }
+  ]
+}

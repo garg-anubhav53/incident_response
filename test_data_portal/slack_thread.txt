@@ -1,0 +1,8 @@
+09:12 @bob.sre: portal is throwing errors, customers can't log in, investigating
+09:14 @carol.dev: confirmed, getting SSO failures on login page - portal is down
+09:15 @bob.sre: alert fired, acknowledging. IES detection is still running - emails are being processed normally
+09:20 @bob.sre: logs show session-service-prod is unreachable, that's the auth backend
+09:35 @carol.dev: no recent deployments to auth service, this isn't deploy-related
+09:45 @bob.sre: restarting session-service-prod pod
+10:00 @bob.sre: session service back up, portal auth restoring
+10:05 @bob.sre: portal fully accessible again, marking resolved. Detection was unaffected the entire time - only portal login was impacted

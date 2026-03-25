@@ -1,0 +1,12 @@
+{
+  "logGroup": "/aws/portal-auth-service",
+  "logStream": "prod-us-east-1",
+  "events": [
+    {"timestamp": "2025-02-10T09:10:00Z", "level": "ERROR", "message": "SSO token validation failed: session-service-prod unreachable"},
+    {"timestamp": "2025-02-10T09:10:05Z", "level": "ERROR", "message": "SSO token validation failed: session-service-prod unreachable"},
+    {"timestamp": "2025-02-10T09:10:30Z", "level": "ERROR", "message": "SSO token validation failed: session-service-prod unreachable"},
+    {"timestamp": "2025-02-10T09:12:00Z", "level": "ERROR", "message": "Health check failed: session service unreachable at session-service-prod.internal:8080"},
+    {"timestamp": "2025-02-10T09:45:00Z", "level": "INFO", "message": "Restarting session-service-prod pod"},
+    {"timestamp": "2025-02-10T10:00:00Z", "level": "INFO", "message": "session-service-prod connection restored, auth requests resuming"}
+  ]
+}

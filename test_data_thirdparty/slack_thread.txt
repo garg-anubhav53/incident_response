@@ -1,0 +1,8 @@
+16:28 @alice.engineer: getting remediation action failures, looking into logs
+16:30 @alice.engineer: alert fired, acknowledging. seeing Microsoft Graph 503s in the logs — this looks external
+16:35 @alice.engineer: confirmed — graph.microsoft.com is returning 503s consistently. This is a Microsoft outage, nothing we can do on our end
+16:38 @bob.sre: detection still working fine, IES email security is unaffected. Only remediation actions are delayed
+16:40 @alice.engineer: checked Microsoft status page — they have an active incident with Graph API affecting multiple services
+17:00 @alice.engineer: Microsoft incident still ongoing, no ETA from their side. Our service is fine, we're just waiting on them
+18:55 @alice.engineer: Microsoft Graph API restored per their status page, seeing actions resume in logs
+19:00 @alice.engineer: all remediation actions processing again, backlog draining. Marking resolved

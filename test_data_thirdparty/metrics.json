@@ -1,0 +1,32 @@
+{
+  "metrics": [
+    {
+      "metric_name": "remediation_action_latency_seconds",
+      "labels": {"service": "remediation-service", "quantile": "0.99"},
+      "values": [
+        {"timestamp": "2025-02-15T16:20:00Z", "value": 1.5},
+        {"timestamp": "2025-02-15T16:25:00Z", "value": 1.6},
+        {"timestamp": "2025-02-15T16:30:00Z", "value": 48.0},
+        {"timestamp": "2025-02-15T16:45:00Z", "value": 62.0},
+        {"timestamp": "2025-02-15T17:00:00Z", "value": 59.0},
+        {"timestamp": "2025-02-15T18:00:00Z", "value": 55.0},
+        {"timestamp": "2025-02-15T19:00:00Z", "value": 1.7},
+        {"timestamp": "2025-02-15T19:15:00Z", "value": 1.5}
+      ]
+    },
+    {
+      "metric_name": "ies_detection_throughput_per_minute",
+      "labels": {"service": "ies-pipeline", "region": "us"},
+      "values": [
+        {"timestamp": "2025-02-15T16:20:00Z", "value": 1200},
+        {"timestamp": "2025-02-15T16:25:00Z", "value": 1195},
+        {"timestamp": "2025-02-15T16:30:00Z", "value": 1205},
+        {"timestamp": "2025-02-15T16:45:00Z", "value": 1198},
+        {"timestamp": "2025-02-15T17:00:00Z", "value": 1202},
+        {"timestamp": "2025-02-15T18:00:00Z", "value": 1199},
+        {"timestamp": "2025-02-15T19:00:00Z", "value": 1201},
+        {"timestamp": "2025-02-15T19:15:00Z", "value": 1204}
+      ]
+    }
+  ]
+}
