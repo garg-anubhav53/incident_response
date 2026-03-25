@@ -1,5 +1,5 @@
 {
-  "incident_summary": "API gateway experienced severe latency degradation (p99 15.2s vs baseline ~500ms) for approximately 2.5 hours due to database connection pool exhaustion triggered by a configuration change that tripled HTTP client timeout values.",
+  "incident_summary": "API gateway experienced severe latency degradation (p99 15.2s vs normal <1s) for approximately 2.5 hours due to database connection pool exhaustion caused by a configuration change that tripled HTTP client timeout values.",
   "affected_service": "api-gateway",
   "affected_products": [
     "Customer-facing API"
@@ -15,65 +15,68 @@
     "resolved_time_utc": "2025-01-15T16:45:00Z"
   },
   "root_cause": {
-    "summary": "Configuration change increased HTTP client timeout from 10s to 30s, causing database connections to be held 3x longer and exhausting the fixed-size connection pool (50 connections).",
+    "summary": "HTTP client timeout configuration change from 10s to 30s caused database connection pool exhaustion by holding connections 3x longer than normal, preventing connection recycling.",
     "status": "confirmed",
-    "trigger": "Deployment at 2025-01-15T14:15:00Z changing HTTP client timeout configuration from 10s to 30s",
-    "mechanism": "Longer timeout values caused database connections to remain active for extended periods. With a fixed pool size of 50 connections, the pool could not recycle connections fast enough to serve incoming request volume. Once exhausted, new requests waited up to 30 seconds for available connections, cascading into severe API latency."
+    "trigger": "Deployment at 2025-01-15T14:15:00Z changing HTTP client timeout from 10s to 30s",
+    "mechanism": "Tripled timeout duration prevented connection pool from recycling connections fast enough; when all 50 connections became occupied, new requests queued for up to 30s causing cascading latency and timeouts"
   },
   "customer_impact": {
-    "description": "Customers experienced significantly slower API response times, with requests taking up to 15+ seconds instead of the normal sub-second response. Some requests may have timed out entirely if client-side timeouts were shorter than 15 seconds.",
-    "severity_assessment": "degraded_performance",
+    "description": "Customers experienced severe API performance degradation with response times increasing from under 1 second to over 15 seconds, causing timeouts and intermittent errors when accessing the platform.",
+    "severity_assessment": "partial_outage",
     "affected_functionality": [
-      "API request processing",
-      "All API-dependent operations"
+      "API requests",
+      "Platform access via API"
     ],
     "unaffected_functionality": []
   },
   "resolution": {
-    "action_taken": "Rolled back the configuration change by reverting HTTP client timeout from 30s back to 10s at 2025-01-15T15:45:00Z",
-    "confirmed_by": "Connection pool utilization dropped to 60% (from 100%), p99 latency returned to baseline ~500ms by 16:00 UTC, CloudWatch logs showed 'Database connection pool recovered' at 15:05 UTC"
+    "action_taken": "Rolled back the HTTP client timeout configuration change, reverting timeout from 30s back to 10s",
+    "confirmed_by": "Connection pool utilization dropped from 100% (50/50) to 60% (30/50) per CloudWatch logs at 15:05 UTC; engineer monitoring confirmed metrics stable for 90 minutes post-rollback before resolving incident"
   },
   "confidence_scores": {
     "root_cause": "high",
     "scope": "medium",
     "timeline": "high",
-    "customer_impact": "medium"
+    "customer_impact": "high"
   },
   "source_attribution": {
     "root_cause": [
-      "GitHub deployment at 14:15:00Z to api-gateway",
-      "Slack thread engineer confirmation 'Found it! PR #12345... Changed HTTP client timeout from 10s to 30s'",
-      "Slack explanation 'Connection pool can't recycle fast enough with the longer timeout'",
-      "Rollback deployment description 'Emergency rollback... due to database connection pool exhaustion'"
+      "GitHub deployment showing PR #12345 deployed at 14:15 UTC changing timeout 10s\u219230s to api-gateway",
+      "Slack thread engineer confirmation: 'Found it! PR #12345 deployed at 2:15 PM. Changed HTTP client timeout from 10s to 30s. That's holding connections 3x longer!'",
+      "Slack thread: 'Connection pool can't recycle fast enough with the longer timeout'",
+      "GitHub deployment showing rollback PR #12347 at 15:45 UTC with description 'Emergency rollback of PR #12345 due to database connection pool exhaustion'",
+      "CloudWatch logs showing recovery at 15:05 UTC after rollback"
     ],
     "timeline": [
-      "PagerDuty alert trigger 14:23:00Z",
-      "GitHub deployment timestamp 14:15:00Z",
-      "CloudWatch first error log 14:23:15Z",
-      "Slack rollback initiation 14:45 PM (~14:45:00Z)",
-      "Slack rollback complete 3:00 PM (~15:00:00Z)",
-      "GitHub rollback deployment 15:45:00Z",
-      "Slack monitoring complete 4:45 PM (~16:45:00Z)",
-      "PagerDuty resolved 16:45:00Z"
+      "PagerDuty alert trigger at 14:23 UTC",
+      "GitHub deployment timestamp 14:15 UTC for causal change",
+      "CloudWatch first error log 14:23:15 UTC",
+      "Slack acknowledgment 14:25 UTC (2:25 PM Pacific)",
+      "GitHub rollback deployment 15:45 UTC",
+      "CloudWatch recovery log 15:05 UTC",
+      "PagerDuty resolution 16:45 UTC",
+      "Slack 90-minute monitoring confirmation before resolution"
     ],
     "customer_impact": [
-      "PagerDuty alert 'p99 latency > 5s (actual: 15.2s)'",
-      "CloudWatch logs showing 30-second connection wait times",
-      "Slack engineer assessment of cascading timeouts"
+      "PagerDuty alert showing p99 latency 15.2s vs threshold 5s",
+      "CloudWatch logs showing 30s connection wait times",
+      "Slack context describing 'customer-facing API'",
+      "Connection timeout errors would manifest as API errors/timeouts to end users"
     ]
   },
   "data_gaps": [
-    "Exact customer request failure rate unknown - only latency metrics available, unclear how many requests actually failed vs. succeeded slowly",
-    "Geographic/regional scope unconfirmed - data does not indicate whether all regions were affected or only specific deployments",
-    "Baseline request volume unknown - cannot determine if traffic spike contributed or if purely configuration-driven",
-    "Recovery timing ambiguous - CloudWatch shows pool recovery at 15:05 UTC but rollback deployed at 15:45 UTC, suggesting partial self-recovery before mitigation",
-    "Customer-facing product names unknown - only 'api-gateway' service identified, unclear which specific SaaS products depend on this API"
+    "Geographic scope unknown - no data indicates whether impact was global or regional",
+    "Percentage of requests affected unknown - logs show errors but not total request volume or error rate",
+    "Specific customer-facing features affected unknown beyond general 'API' - no data on which API endpoints or product capabilities were impacted",
+    "Baseline metrics incomplete - no pre-incident p99 latency values provided to quantify degradation magnitude",
+    "Other services/products status unknown - only api-gateway mentioned, unclear if other services were affected",
+    "Customer reports/tickets not included - impact assessment based on technical metrics only"
   ],
   "internal_details_to_exclude": [
     "alice.engineer@example.com",
     "john.dev@example.com",
-    "bob.sre@example.com",
     "jane.dev@example.com",
+    "bob.sre@example.com",
     "rds-prod-main",
     "PR #12345",
     "PR #12340",
@@ -82,8 +85,8 @@
     "commit_sha: def456",
     "commit_sha: xyz789",
     "#incidents Slack channel",
-    "api-gateway/config/http_client.yaml file path",
-    "notification-service (unrelated deployment)",
-    "PagerDuty incident ID PXXX123"
+    "CloudWatch log context showing internal database names",
+    "Specific file paths: api-gateway/config/http_client.yaml",
+    "Internal monitoring tool names and dashboard references"
   ]
 }

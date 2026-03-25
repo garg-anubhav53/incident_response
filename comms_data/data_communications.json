@@ -4,22 +4,22 @@
     {
       "stage": "investigating",
       "posted_at_pt": "6:25 AM PT",
-      "message": "We are investigating reports of slower than normal API response times. Some customers may be experiencing delays when making API requests, with responses taking longer than usual to complete. Our engineering team is actively investigating the cause and scope of the issue. We will provide an update within 30 minutes."
+      "message": "We are investigating reports of slow API response times affecting platform access. Our team is actively working to identify the cause and scope of the issue. Detection and security functions remain fully operational. We will provide an update within 30 minutes."
     },
     {
       "stage": "identified",
-      "posted_at_pt": "6:50 AM PT",
-      "message": "We have identified the cause of the API performance degradation as a recent configuration change. Customers are experiencing significantly slower API response times, with some requests taking 15+ seconds instead of the normal sub-second response. Our team is implementing a fix by reverting the configuration change. We expect to see improvement within the next 30 minutes and will provide another update shortly."
+      "posted_at_pt": "7:00 AM PT",
+      "message": "We have identified a configuration change as the cause of elevated API response times. Customers may experience delays or timeouts when accessing the platform via API. Our team is implementing a fix and expects to restore normal performance within the next hour. Next update in 30 minutes."
     },
     {
       "stage": "monitoring",
-      "posted_at_pt": "8:05 AM PT",
-      "message": "The configuration change has been successfully reverted and API response times are returning to normal levels. We are monitoring the recovery closely and have observed significant improvement, with most requests now completing in under one second. We will continue monitoring for the next hour to ensure full stability before marking this incident as resolved."
+      "posted_at_pt": "8:00 AM PT",
+      "message": "The configuration change has been reverted and API response times are returning to normal levels. We are monitoring system performance to ensure full stability before resolving this incident. Most customers should now experience normal platform access. Next update in 30 minutes."
     },
     {
       "stage": "resolved",
       "posted_at_pt": "8:45 AM PT",
-      "message": "This incident has been resolved. API performance has returned to normal baseline levels and all systems are operating as expected. We apologize for any inconvenience this may have caused.\n\nIncident Summary:\n- Start time: Approximately 6:15 AM PT\n- Resolution time: 8:45 AM PT\n- Duration: Approximately 2.5 hours\n- Impact: Customers experienced degraded API performance with significantly slower response times during this period."
+      "message": "This incident has been resolved. API performance has returned to normal and all platform functions are operating as expected. Incident summary: Started at approximately 6:15 AM PT, resolved at 8:45 AM PT (total duration: 2 hours 30 minutes). Impact: Customers experienced slow API response times and intermittent timeouts when accessing the platform. We apologize for any inconvenience this may have caused."
     }
   ]
 }

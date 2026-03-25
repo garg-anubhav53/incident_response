@@ -4,22 +4,22 @@
     {
       "stage": "investigating",
       "posted_at_pt": "7:30 AM PT",
-      "message": "We are investigating reports of delayed threat processing for customers in the EU region. Threats are still being detected and queued for analysis, but processing is slower than normal. Threat detection in US and Asia-Pacific regions is operating normally. Our team is actively investigating the cause and will provide an update within 30 minutes."
+      "message": "We are investigating reports of delayed threat processing for customers in the EU region. Threats are still being detected and queued for analysis, but processing is taking longer than normal. Threat detection in US and Asia-Pacific regions is operating normally. Our team is actively investigating the cause and we will provide an update within 30 minutes."
     },
     {
       "stage": "identified",
       "posted_at_pt": "7:45 AM PT",
-      "message": "We have identified a configuration issue affecting threat processing performance in the EU region. Our team has implemented an initial mitigation and is working on a full resolution. Threats continue to be detected and queued \u2014 no threats are being missed and no data has been lost. US and Asia-Pacific regions remain unaffected. We will provide another update within 30 minutes."
+      "message": "We have identified a database infrastructure issue affecting threat processing speed in the EU region. Our team has initiated failover procedures to restore normal processing times. All threats continue to be detected and queued\u2014no threats are being missed and no data has been lost. Threat detection in US and Asia-Pacific regions remains unaffected. We will provide another update within 30 minutes."
     },
     {
       "stage": "monitoring",
       "posted_at_pt": "9:40 AM PT",
-      "message": "Threat processing performance in the EU region is returning to normal levels. Our monitoring shows processing delays have decreased significantly and queued threats are being analyzed. We are continuing to monitor closely to ensure full stability before marking this incident resolved."
+      "message": "Threat processing speeds in the EU region are returning to normal following infrastructure adjustments. We are monitoring the recovery closely to ensure stability. Processing delays have decreased significantly and we expect full resolution shortly. We will confirm resolution once all metrics have returned to baseline."
     },
     {
       "stage": "resolved",
       "posted_at_pt": "9:45 AM PT",
-      "message": "This incident has been resolved. Threat processing in the EU region has returned to normal performance levels. All queued threats have been processed and the service is operating as expected across all regions.\n\nIncident Summary:\n\u2022 Started: Approximately 7:25 AM PT\n\u2022 Resolved: 9:45 AM PT\n\u2022 Duration: ~2 hours 20 minutes\n\u2022 Impact: EU region customers experienced delayed threat processing; all threats were detected and queued, with no data loss\n\nWe apologize for any inconvenience this incident may have caused."
+      "message": "This incident has been resolved. Threat processing in the EU region has returned to normal speed. All queued threats have been processed and the system is operating as expected.\n\nIncident Summary:\n- Start time: Approximately 7:25 AM PT on March 20, 2025\n- Resolution time: 9:45 AM PT on March 20, 2025\n- Duration: Approximately 2 hours 20 minutes\n- Impact: Customers in the EU region experienced delayed threat processing. All threats were detected and queued, and no threats were missed or data lost.\n\nWe apologize for any inconvenience this may have caused."
     }
   ]
 }
