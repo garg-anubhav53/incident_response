@@ -394,22 +394,22 @@ VOICE AND TONE:
 
 TITLE: Short, customer-symptom-focused ("API Performance Degradation", "Portal Access Issues"). Never include severity codes, internal service names, or root cause.
 
-REQUIRED FIELDS — every stage message MUST contain all six, in this order:
-1. AFFECTED SERVICE: Name what's impacted in customer terms ("the Abnormal Portal", "API endpoints", "email threat detection").
-2. WHAT'S NOT AFFECTED (MOST CRITICAL — place this as the second sentence in every update): Explicitly state what continues working. If confirmed: "Email detection and remediation remain fully operational." If unknown: "Other services are not reporting issues at this time." NEVER omit this field. NEVER cut this field to meet word count. For a security vendor, this is the single most important sentence customers read.
-3. CUSTOMER IMPACT: Plain-language description of what customers experience ("may experience slower response times", "may see errors when accessing the portal").
-4. TIMESTAMP: When the issue started, in PT with approximate language ("Starting around 2:20 PM PT").
-5. NEXT UPDATE COMMITMENT (skip for Resolved): Investigating → "within 30 minutes"; Identified → "within [estimated time]"; Monitoring → "we will continue monitoring for [duration]."
-6. CUSTOMER ACTION: What to do. ALL stages including Investigating: "No action is required at this time." Resolved: "If you continue to experience issues, please contact our support team."
+MESSAGE STRUCTURE — compose every stage message with sentences in this exact order. This is the sentence structure, not just a field list:
+1. WHAT HAPPENED + TIMESTAMP: Lead with what is happening/happened and when. ("Starting around 2:20 PM PT, we are investigating an issue affecting...")
+2. WHAT IS NOT AFFECTED — THIS IS THE SECOND SENTENCE, MANDATORY, NEVER MOVED OR TRIMMED: Explicitly state what continues working. Never position this later in the message for any reason.
+3. CUSTOMER IMPACT: What customers are experiencing in plain language.
+4. WHAT WE ARE DOING: Engineering team action.
+5. CUSTOMER ACTION (ALL stages including Investigating): "No action is required at this time." Resolved: "If you continue to experience issues, please contact our support team."
+6. NEXT UPDATE TIMING (omit for Resolved): "We will provide an update within 30 minutes."
 
-If data has gaps for any field, use hedging language ("some customers may...") rather than omitting. A missing field is worse than an approximate one.
+Sentence 2 content depends on detection_status and remediation_status (see URGENCY CALIBRATION). Never omit sentence 2. If word count must be reduced, cut sentences 4 or 6 first.
 
-URGENCY CALIBRATION (use security_function_impact from extraction):
-- detection_status degraded/offline: Highest urgency. Title must reference threat detection or email security. State what security coverage is affected prominently in every update. No minimizing language.
-- remediation_status degraded/offline, detection operational: Moderate-high urgency. Title references response/remediation. Every update must state detection remains fully operational. Include: "Detected threats are visible in the portal and can be acted on manually."
-- Both operational (primary_category=other): Standard urgency. Second sentence in every update: "Email security detection and automated remediation remain fully operational and continue to protect against threats."
-- detection_status unknown: Do NOT write "detection remains operational." Use: "We are confirming the status of detection services and will provide an update shortly."
-Always populate the "what's not affected" field from detection_status and remediation_status values — never infer this independently.
+URGENCY CALIBRATION — sentence 2 content is determined by detection_status and remediation_status. Use the exact language below. Do not infer status independently.
+- detection_status "degraded": Sentence 2 MUST state the active risk: "Email security detection is currently degraded, and some threats may not be detected or acted upon automatically." Do NOT use reassurance language. Do NOT say detection is operational.
+- detection_status "offline": Sentence 2 MUST state: "Email security detection is currently offline, and threats may not be detected or remediated automatically." Title must reference threat detection or email security.
+- remediation_status "degraded" or "offline", detection operational: Sentence 2: "Email security detection remains fully operational; however, automated remediation [is degraded / is offline], and detected threats should be reviewed manually in the portal."
+- Both fully_operational (primary_category=other): Sentence 2: "Email security detection and automated remediation remain fully operational and continue to protect against threats."
+- detection_status "unknown": Sentence 2: "We are confirming the status of email security detection services and will provide an update shortly." Do NOT say detection is operational or degraded.
 
 RULES:
 1. NEVER include anything from internal_details_to_exclude. No engineer names, hostnames, PR numbers, commit SHAs.
@@ -959,9 +959,18 @@ def validate_communications(comms: dict, extraction: dict = None) -> list:
     # SFI checks
     DETECTION_CONFIRM_KW  = ["detection", "email security", "threat protection",
                               "threat detection", "email scanning", "security scanning"]
-    FALSE_REASSURANCE_KW  = ["detection remain fully", "detection remains fully",
-                              "detection continue to", "threat detection remain",
-                              "email security remain fully", "detection is fully operational"]
+    FALSE_REASSURANCE_KW  = [
+        "detection remain fully", "detection remains fully",
+        "detection continue to", "threat detection remain",
+        "email security remain fully", "detection is fully operational",
+        # Broader coverage for LLM phrasing variations
+        "all security functions", "security systems remain",
+        "email detection continues", "email scanning remains",
+        "threat protection remains", "detection and remediation remain",
+        "detection and remediation continue", "detecting normally",
+        "protected against threats", "continuing to protect",
+        "email security detection remain", "email security detection continue",
+    ]
 
     # Pull SFI data once (used per-comm below)
     sfi = (extraction or {}).get("security_function_impact", {})
@@ -1028,7 +1037,7 @@ def validate_communications(comms: dict, extraction: dict = None) -> list:
     return warnings
 
 
-def validate_extraction_consistency(extraction: dict) -> list:
+def validate_extraction_consistency(extraction: dict, deployment_flags: list = None) -> list:
     """Cross-check extraction fields for logical contradictions.
 
     Returns a list of consistency flag dicts with keys: field, detail, severity.
@@ -1081,6 +1090,15 @@ def validate_extraction_consistency(extraction: dict) -> list:
                 "detail": "Pattern is 'third_party_dependency' but root_cause.trigger does not mention an external service. Verify the dependency name is documented.",
                 "severity": "medium",
             })
+
+    # Deployment correlation vs. LLM classification contradiction
+    # deployment_flags=[] means the deterministic check found nothing suspicious
+    if deployment_flags is not None and pattern == "deployment_induced" and not deployment_flags:
+        flags.append({
+            "field": "Deployment correlation vs. AI classification",
+            "detail": "AI classified this as 'deployment_induced' but deterministic deployment correlation found no flagged deployments in the pre-onset window. The AI may be pattern-matching on service names rather than timing evidence. Review root cause reasoning carefully.",
+            "severity": "medium",
+        })
 
     logger.info(f"Extraction consistency check: {len(flags)} flags")
     return flags
@@ -1829,7 +1847,7 @@ def main():
 
             status.text("✔ Validating...")
             st.session_state.validation_warnings = validate_communications(comms, extraction)
-            st.session_state.consistency_flags   = validate_extraction_consistency(extraction)
+            st.session_state.consistency_flags   = validate_extraction_consistency(extraction, deployment_flags)
             bar.progress(100)
             logger.info(f"processing: validation done — {len(st.session_state.validation_warnings)} warnings, "
                         f"{len(st.session_state.consistency_flags)} consistency flags")
