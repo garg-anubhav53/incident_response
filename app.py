@@ -1,0 +1,1928 @@
+import streamlit as st
+import json
+import os
+import sys
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from dotenv import load_dotenv
+from anthropic import Anthropic
+import logging
+
+# Configure detailed logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+    handlers=[
+        logging.FileHandler('app_debug.log'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+
+load_dotenv()
+logger.info("=== APP STARTUP ===")
+logger.info(f"Python version: {sys.version}")
+logger.info(f"Streamlit version: {st.__version__}")
+logger.info(f"Current working directory: {os.getcwd()}")
+client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+logger.info(f"Anthropic client initialized, API key present: {bool(os.getenv('ANTHROPIC_API_KEY'))}")
+
+st.set_page_config(
+    page_title="Incident Communications Generator",
+    page_icon="🚨",
+    layout="centered",
+    initial_sidebar_state="expanded",
+)
+logger.info("Streamlit page config set")
+
+# ── CSS ────────────────────────────────────────────────────────────────────────
+# Every custom HTML element has an explicit color — never inherited from Streamlit's
+# theme (which may be dark). Config.toml forces light base, but we don't rely on it.
+#
+# Color system:
+#   Page bg:    #f0f2f6  (set in .streamlit/config.toml)
+#   Card bg:    #ffffff  (content surfaces)
+#   Text:       #0f172a (headings) / #334155 (body) / #64748b (labels) / #94a3b8 (muted)
+#   Brand:      #4f46e5 → #7c3aed  (indigo-violet gradient)
+#   Resolved:   #059669  (emerald-600)
+#   Monitoring: #0284c7  (sky-600)
+#   Warning:    #d97706  (amber-600)
+#   Alert:      #ea580c  (orange-600)
+#   Outage:     #dc2626  (red-600)
+CSS_STYLES = """
+<style>
+/* ── Layout ── */
+.main .block-container { padding-top: 2rem; max-width: 1100px; }
+
+/* ── Page header banner ── */
+.main-header {
+    background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+    padding: 2.5rem 2rem;
+    text-align: center;
+    border-radius: 12px;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 4px 20px rgba(79,70,229,0.3);
+}
+.main-header h1 {
+    margin: 0;
+    font-size: 2.1rem;
+    font-weight: 800;
+    color: #ffffff !important;
+    letter-spacing: -0.5px;
+}
+.main-header p {
+    margin: 0.75rem 0 0 0;
+    font-size: 1.05rem;
+    color: #e0e7ff !important;
+}
+
+/* ── Info / feature cards (upload page tiles) ── */
+.info-card {
+    background: #ffffff;
+    border-radius: 10px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.07);
+    color: #334155;
+}
+.info-card h3 {
+    margin: 0 0 0.85rem 0;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #0f172a;
+}
+.info-card p  { margin: 0; color: #475569; font-size: 0.9rem; }
+.info-card ul { margin: 0.5rem 0 0 0; padding-left: 1.25rem; color: #475569; font-size: 0.9rem; }
+.info-card li { margin-bottom: 0.35rem; }
+.info-card li strong { color: #1e293b; }
+.info-card em { color: #64748b; }
+
+/* ── Progress step indicators ── */
+.progress-step {
+    padding: 0.7rem 1rem;
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+    font-size: 0.9rem;
+    border-left: 4px solid #cbd5e1;
+    background: #f1f5f9;
+    color: #64748b;
+}
+.progress-step.active {
+    border-left-color: #4f46e5;
+    background: #eef2ff;
+    color: #3730a3;
+    font-weight: 600;
+}
+.progress-step.completed {
+    border-left-color: #059669;
+    background: #f0fdf4;
+    color: #065f46;
+    font-weight: 600;
+}
+
+/* ── Status page container ── */
+.status-container { max-width: 760px; margin: 0 auto; padding: 0 8px; }
+
+/* ── Overall status badge ── */
+.overall-status { text-align: center; padding: 16px 0 28px 0; }
+.overall-status .badge {
+    display: inline-block;
+    padding: 8px 22px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+}
+.badge-resolved { background: #059669; color: #ffffff !important; }
+.badge-degraded { background: #d97706; color: #ffffff !important; }
+.badge-outage   { background: #dc2626; color: #ffffff !important; }
+
+/* ── Date group label ── */
+.date-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: #64748b;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #e2e8f0;
+    margin-bottom: 18px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+
+/* ── Incident card ── */
+.incident-card {
+    background: #ffffff;
+    border-radius: 10px;
+    padding: 1.5rem 1.75rem;
+    box-shadow: 0 2px 14px rgba(0,0,0,0.08);
+    margin-bottom: 24px;
+    border: 1px solid #e2e8f0;
+}
+.incident-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #0f172a;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+/* ── Status dots ── */
+.dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.dot-green  { background: #059669; }
+.dot-yellow { background: #d97706; }
+.dot-orange { background: #ea580c; }
+.dot-red    { background: #dc2626; }
+
+/* ── Update timeline entries ── */
+.status-update {
+    padding: 0 0 18px 22px;
+    border-left: 3px solid #e2e8f0;
+    margin-left: 5px;
+}
+.status-update-last { border-left: 3px solid transparent; }
+
+/* ── Stage labels (colored text on white card bg) ── */
+.stage-label {
+    font-weight: 700;
+    font-size: 12px;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.stage-resolved      { color: #059669 !important; }
+.stage-monitoring    { color: #0284c7 !important; }
+.stage-identified    { color: #ea580c !important; }
+.stage-investigating { color: #ea580c !important; }
+
+/* ── Update body text ── */
+.update-message {
+    font-size: 14px;
+    color: #334155;
+    line-height: 1.7;
+    margin-bottom: 4px;
+}
+.update-timestamp { font-size: 11px; color: #94a3b8; margin-top: 4px; }
+
+/* ── Deployment alert banner (above status page) ── */
+.deploy-high {
+    background: #fff7ed;
+    border: 1px solid #fdba74;
+    border-left: 4px solid #ea580c;
+    border-radius: 8px;
+    padding: 0.85rem 1rem;
+    margin-bottom: 0.75rem;
+    color: #7c2d12;
+}
+.deploy-high strong { color: #7c2d12; }
+.deploy-high code {
+    background: #ffedd5;
+    color: #9a3412;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 12px;
+}
+
+/* ── Validation pass message ── */
+.val-pass {
+    background: #f0fdf4;
+    border: 1px solid #86efac;
+    border-left: 4px solid #059669;
+    border-radius: 8px;
+    padding: 0.85rem 1rem;
+    margin-bottom: 0.5rem;
+    color: #14532d;
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+/* ── Security function impact badges (next to severity badge) ── */
+.sfi-badge {
+    display: inline-block;
+    padding: 8px 18px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    margin-left: 10px;
+    vertical-align: middle;
+}
+.sfi-badge-detection    { background: #dc2626; color: #ffffff !important; }
+.sfi-badge-remediation  { background: #ea580c; color: #ffffff !important; }
+.sfi-badge-operational  { background: #059669; color: #ffffff !important; }
+.sfi-badge-unknown      { background: #94a3b8; color: #ffffff !important; }
+
+/* ── Security function status pills (in structured analysis expander) ── */
+.sfi-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+.sfi-operational { background: #f0fdf4; color: #065f46; border: 1px solid #bbf7d0; }
+.sfi-degraded    { background: #fefce8; color: #713f12; border: 1px solid #fde68a; }
+.sfi-offline     { background: #fef2f2; color: #7f1d1d; border: 1px solid #fecaca; }
+.sfi-unknown     { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
+</style>
+"""
+st.markdown(CSS_STYLES, unsafe_allow_html=True)
+
+# ── Extraction system prompt ───────────────────────────────────────────────────
+EXTRACTION_SYSTEM_PROMPT = """You are an incident analysis engine for a SaaS security platform. You receive raw technical data from multiple sources about a production incident. Extract a structured, accurate analysis.
+
+CRITICAL RULES:
+1. NEVER state a fact without source support. If you cannot determine something, say so in data_gaps.
+2. Distinguish CONFIRMED root cause (engineers said "found it", "confirmed", "that's it") from HYPOTHESIS ("I think", "maybe", "could be"). Set root_cause.status accordingly.
+3. Cross-reference timestamps across ALL sources. Flag inconsistencies.
+4. A deployment is root cause ONLY IF: deployed to SAME failing service AND timing correlates AND engineers confirmed OR rollback fixed it. Unrelated deploys: note but do not attribute causation.
+5. For metrics: baseline = pre-incident normal. Anomaly = >2x or <0.5x baseline. Note if recovery is gradual or sudden.
+6. For scope: only state what data proves. If data mentions only one region/service, flag others as unconfirmed — do NOT assume unaffected.
+7. EXCLUDE from customer comms: engineer emails, internal hostnames, cluster names, PR numbers, commit SHAs, internal Slack channels. List all found.
+8. Map technical symptoms to customer experience: connection pool exhaustion → "API performance degradation"; 500 errors → "intermittent errors" (partial) or "service unavailable" (total); auth failures → "login issues"; detection pipeline errors → "delayed threat detection" (URGENT — security product).
+9. Severity: degraded_performance = works but slow, most requests succeed; partial_outage = significant error rate but partially functional; full_outage = nearly all requests failing.
+10. Timeline: use EARLIEST corroborating signal for onset (often metrics, before the alert). Use LATEST confirmation for resolution (post-monitoring). Alert time = detection, not onset.
+11. PATTERN CLASSIFICATION: Classify into exactly one primary pattern. Definitions — deployment_induced: code/config deploy correlates with onset AND confirmed by engineers or rollback fixed it; infrastructure_cascade: multiple services fail simultaneously, no deployment trigger; regional_failure: errors scoped to a specific region; portal_auth_failure: UI/login errors but core processing (email, detection) unaffected; third_party_dependency: errors reference external APIs (Microsoft Graph, AWS, etc.) with no internal cause; integration_api_failure: outbound webhooks/SIEM/SOAR failing, core product fine; silent_degradation: no hard errors but quality metrics drift; isolated_environment: Gov/FedRAMP-scoped. If ambiguous, pick the stronger pattern and note the alternative in reasoning.
+12. INFERENCE LOG: For every factual claim in the analysis, log the inference chain. inference_type values: direct_observation (fact explicitly stated in one source), cross_reference (derived by correlating multiple sources), absence_of_evidence (conclusion based on what's NOT in the data), engineer_confirmation (engineers explicitly agreed in Slack).
+13. SECURITY FUNCTION CLASSIFICATION: Classify what security function is impacted. Detection signals: IES/email scanning errors, threat scoring failures, ML model errors, ATO monitoring failures, AIPC errors, engineers mentioning missed threats. Remediation signals: quarantine/deletion errors, Microsoft Graph failures, SOAR errors, threats detected but automated response broken. Other signals: portal/auth errors (detection unaffected), SIEM delivery, EPR, notification delays, infrastructure confirmed not impacting security pipeline. CRITICAL safeguards — (a) For ambiguous service names (api-gateway, platform), classify from symptoms and engineer discussion, NOT service name alone. (b) If engineers confirm detection unaffected, set detection_status=fully_operational. (c) If uncertain whether detection is impacted, set detection_status=unknown and add to data_gaps — NEVER default to fully_operational when uncertain. (d) When ambiguous, classify toward higher severity: detection > remediation > other.
+14. EVIDENCE TRACE: For each of the 5 verification questions (what_is_broken, what_caused_it, when_did_it_happen, what_is_not_broken, how_bad_is_it), cite specific raw evidence from the source data. Requirements: (a) raw_excerpt must be verbatim — copy exact log lines, exact Slack messages with author+timestamp, exact metric values as "name: value at timestamp." Never paraphrase. (b) For metrics, cite baseline values, first anomalous value, peak, and recovery point as specific timestamp-value pairs. (c) Always populate counter_evidence — include anything that weakens the conclusion, even if later dismissed. Empty array only if truly nothing contradicts. (d) For what_is_not_broken: absence of errors is valid evidence but label it "absence_of_evidence." Never claim a service is unaffected based solely on service name. (e) verification_suggestion must be a specific action the IC can complete in under 2 minutes (check a named dashboard, ask a specific person, run a specific query).
+
+Return ONLY valid JSON, no markdown fencing:
+
+{
+  "incident_summary": "One sentence: what happened, to what service(s), for how long, at what severity",
+  "affected_service": "Primary service from alert data",
+  "affected_products": ["Customer-facing product names if determinable, otherwise 'unknown'"],
+  "severity": "From PagerDuty if available",
+  "timeline": {
+    "cause_time_utc": "When the triggering event occurred — null if unknown",
+    "onset_time_utc": "When degradation first appeared in metrics/logs",
+    "detection_time_utc": "When alert fired or engineers noticed",
+    "acknowledged_time_utc": "When engineer responded",
+    "mitigation_time_utc": "When fix was deployed",
+    "recovery_time_utc": "When metrics returned to baseline",
+    "resolved_time_utc": "When incident was formally closed"
+  },
+  "root_cause": {
+    "summary": "One sentence confirmed root cause, or 'not confirmed in available data'",
+    "status": "confirmed | hypothesized | unknown",
+    "trigger": "Specific causal event, or null",
+    "mechanism": "How trigger caused impact, or null"
+  },
+  "customer_impact": {
+    "description": "What customers experienced in plain language",
+    "severity_assessment": "degraded_performance | partial_outage | full_outage",
+    "affected_functionality": ["what didn't work"],
+    "unaffected_functionality": ["what continued working — only if confirmed"]
+  },
+  "resolution": {
+    "action_taken": "What fixed the incident",
+    "confirmed_by": "Evidence of recovery"
+  },
+  "confidence_scores": {
+    "root_cause": "high | medium | low",
+    "scope": "high | medium | low",
+    "timeline": "high | medium | low",
+    "customer_impact": "high | medium | low"
+  },
+  "source_attribution": {
+    "root_cause": ["evidence supporting root cause"],
+    "timeline": ["evidence for timestamps"],
+    "customer_impact": ["evidence for impact assessment"]
+  },
+  "pattern_classification": {
+    "primary_pattern": "deployment_induced | infrastructure_cascade | regional_failure | portal_auth_failure | third_party_dependency | integration_api_failure | silent_degradation | isolated_environment | unknown",
+    "confidence": "high | medium | low",
+    "reasoning": "2-3 sentences: why this pattern, what evidence supports it, any alternative considered"
+  },
+  "security_function_impact": {
+    "primary_category": "detection | remediation | other",
+    "secondary_category": "detection | remediation | other | null",
+    "confidence": "high | medium | low",
+    "reasoning": "2-3 sentences: what evidence connects the failing service to this security function category",
+    "detection_status": "fully_operational | degraded | offline | unknown",
+    "remediation_status": "fully_operational | degraded | offline | unknown"
+  },
+  "inference_log": [
+    {
+      "claim": "What was inferred",
+      "sources": ["data points supporting this"],
+      "inference_type": "direct_observation | cross_reference | absence_of_evidence | engineer_confirmation",
+      "confidence": "high | medium | low"
+    }
+  ],
+  "evidence_trace": [
+    {
+      "question": "what_is_broken | what_caused_it | when_did_it_happen | what_is_not_broken | how_bad_is_it",
+      "conclusion": "One sentence answer to this verification question",
+      "evidence": [
+        {"source_file": "filename.json", "raw_excerpt": "Verbatim text or data from source", "relevance": "Why this supports the conclusion"}
+      ],
+      "counter_evidence": [
+        {"source_file": "filename", "raw_excerpt": "Verbatim text", "relevance": "Why this weakens the conclusion"}
+      ],
+      "verification_suggestion": "Specific actionable step the IC can take in under 2 minutes"
+    }
+  ],
+  "data_gaps": ["Important unknowns — be specific about what's missing and why it matters"],
+  "internal_details_to_exclude": ["Internal names, emails, hostnames, PRs, SHAs found in the data"]
+}"""
+
+# ── Generation system prompt ───────────────────────────────────────────────────
+GENERATION_SYSTEM_PROMPT = """You are a status page communications writer for an enterprise SaaS security company. Generate customer-facing status page updates from a structured incident analysis.
+
+Write in 4 stages: Investigating, Identified, Monitoring, Resolved. A fast-resolved incident may skip Identified and Monitoring.
+
+VOICE AND TONE:
+- Professional, calm, direct. No panic, no minimizing.
+- First person plural ("We are investigating", "Our team has identified").
+- Never defensive. Never name third parties — say "an external dependency" or "an upstream service provider."
+- No technical jargon. Translate to customer experience language.
+
+TITLE: Short, customer-symptom-focused ("API Performance Degradation", "Portal Access Issues"). Never include severity codes, internal service names, or root cause.
+
+REQUIRED FIELDS — every stage message MUST contain all six:
+1. AFFECTED SERVICE: Name what's impacted in customer terms ("the Abnormal Portal", "API endpoints", "email threat detection").
+2. WHAT'S NOT AFFECTED (CRITICAL — most important for a security vendor): Explicitly state what continues working. If confirmed: "Email detection and remediation remain fully operational." If unknown: "Other services are not reporting issues at this time." NEVER omit this field — customers need to know if their security is intact.
+3. CUSTOMER IMPACT: Plain-language description of what customers experience ("may experience slower response times", "may see errors when accessing the portal").
+4. TIMESTAMP: When the issue started, in PT with approximate language ("Starting around 2:20 PM PT").
+5. NEXT UPDATE COMMITMENT (skip for Resolved): Investigating → "within 30 minutes"; Identified → "within [estimated time]"; Monitoring → "we will continue monitoring for [duration]."
+6. CUSTOMER ACTION: What to do. Most stages: "No action is required." Resolved: "If you continue to experience issues, please contact our support team."
+
+If data has gaps for any field, use hedging language ("some customers may...") rather than omitting. A missing field is worse than an approximate one.
+
+URGENCY CALIBRATION (use security_function_impact from extraction):
+- detection_status degraded/offline: Highest urgency. Title must reference threat detection or email security. State what security coverage is affected prominently in every update. No minimizing language. "What's not affected" covers remediation status.
+- remediation_status degraded/offline, detection operational: Moderate-high urgency. Title references response/remediation. Every update must state detection remains fully operational. Include: "Detected threats are visible in the portal and can be acted on manually."
+- Both operational (primary_category=other): Standard urgency. Most important sentence per update: "Email security detection and automated remediation remain fully operational and continue to protect against threats."
+- detection_status unknown: Do NOT write "detection remains operational." Use: "We are confirming the status of detection services and will provide an update shortly."
+Always populate the "what's not affected" field from detection_status and remediation_status values — never infer this independently.
+
+RULES:
+1. NEVER include anything from internal_details_to_exclude. No engineer names, hostnames, PR numbers, commit SHAs.
+2. Timestamps in PT (Pacific Time) formatted "2:30 PM PT". Convert from UTC.
+3. Resolved update: include start time, resolution time, total duration, and one-line impact summary.
+4. Keep each update under 100 words. Status pages are scanned, not read.
+5. Identified stage: reference cause abstractly ("a configuration change", "an infrastructure issue", "an upstream service disruption").
+
+Return ONLY valid JSON, no markdown fencing:
+
+{
+  "title": "Customer-facing incident title",
+  "communications": [
+    {"stage": "investigating", "posted_at_pt": "2:30 PM PT", "message": "..."},
+    {"stage": "identified",    "posted_at_pt": "2:45 PM PT", "message": "..."},
+    {"stage": "monitoring",    "posted_at_pt": "3:15 PM PT", "message": "..."},
+    {"stage": "resolved",      "posted_at_pt": "4:50 PM PT", "message": "..."}
+  ]
+}"""
+
+
+# ── LLM helpers ───────────────────────────────────────────────────────────────
+def parse_llm_json(text: str) -> dict:
+    logger.info(f"=== parse_llm_json STARTED ===")
+    logger.info(f"Input text length: {len(text)} chars")
+    logger.info(f"Input text preview: {text[:100]}...")
+    
+    original_text = text
+    text = text.strip()
+    logger.info(f"After strip: {len(text)} chars")
+    
+    if text.startswith("```"):
+        logger.info("Removing markdown fence start")
+        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        logger.info(f"After removing start fence: {len(text)} chars")
+    
+    if text.endswith("```"):
+        logger.info("Removing markdown fence end")
+        text = text.rsplit("```", 1)[0]
+        logger.info(f"After removing end fence: {len(text)} chars")
+    
+    # NEW: Handle extra text after JSON
+    # Find the end of the JSON object/array
+    brace_count = 0
+    bracket_count = 0
+    in_string = False
+    escape_next = False
+    json_end = -1
+    
+    for i, char in enumerate(text):
+        if escape_next:
+            escape_next = False
+            continue
+            
+        if char == '\\':
+            escape_next = True
+            continue
+            
+        if char == '"' and not escape_next:
+            in_string = not in_string
+            continue
+            
+        if not in_string:
+            if char == '{':
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+            elif char == '[':
+                bracket_count += 1
+            elif char == ']':
+                bracket_count -= 1
+            
+            # Check if we've closed all braces/brackets
+            if brace_count == 0 and bracket_count == 0 and i > 0:
+                json_end = i + 1
+                break
+    
+    if json_end > 0:
+        logger.info(f"Found JSON end at position {json_end}, truncating extra text")
+        text = text[:json_end]
+        logger.info(f"After truncation: {len(text)} chars")
+    
+    try:
+        result = json.loads(text.strip())
+        logger.info(f"JSON parse successful, type: {type(result)}, keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+        logger.info("=== parse_llm_json COMPLETED SUCCESSFULLY ===")
+        return result
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON parse failed: {e}")
+        logger.error(f"Text that failed to parse: {repr(text)}")
+        logger.error(f"Original text: {repr(original_text)}")
+        logger.info("=== parse_llm_json FAILED ===")
+        raise
+
+
+# ── Configuration ───────────────────────────────────────────────────────────────
+# ⚙️  TOKEN LIMITS - Easy to adjust for different use cases:
+# - extraction: Complex incident analysis with inference logs (needs more tokens)
+# - generation: Multi-stage communications (moderate tokens)
+# - default: Fallback for other calls
+# 💡 Increase these if you get JSON truncation errors, decrease to save costs
+TOKEN_LIMITS = {
+    "extraction": 24000,   # Complex incident analysis with inference logs (4x increased)
+    "generation": 16000,   # Multi-stage communications (4x increased)
+    "default": 16000       # Fallback for other calls (4x increased)
+}
+
+# ── LLM helpers ───────────────────────────────────────────────────────────────
+def call_claude(user_message: str, system_prompt: str, max_tokens: int = None, temperature: float = 0.2) -> dict:
+    # Use provided max_tokens or default from config
+    if max_tokens is None:
+        max_tokens = TOKEN_LIMITS["default"]
+    
+    logger.info("=== Claude API Call DETAILED ANALYSIS ===")
+    logger.info(f"PARAMETER ORDER VERIFICATION:")
+    logger.info(f"  user_message length: {len(user_message)} chars")
+    logger.info(f"  system_prompt length: {len(system_prompt)} chars")
+    logger.info(f"  max_tokens: {max_tokens}")
+    logger.info(f"  temperature: {temperature}")
+    
+    # Log content previews for verification
+    logger.info(f"USER MESSAGE PREVIEW (first 300 chars): {repr(user_message[:300])}")
+    logger.info(f"SYSTEM PROMPT PREVIEW (first 200 chars): {repr(system_prompt[:200])}")
+    
+    # Verify parameter types
+    logger.info(f"PARAMETER TYPES: user_message={type(user_message)}, system_prompt={type(system_prompt)}")
+    
+    for attempt in range(1, 3):  # 2 attempts
+        logger.info(f"=== ATTEMPT {attempt}/2 ===")
+        
+        try:
+            logger.info("CREATING API REQUEST...")
+            logger.info(f"  model: claude-sonnet-4-5")
+            logger.info(f"  max_tokens: {max_tokens}")
+            logger.info(f"  temperature: {temperature}")
+            logger.info(f"  messages[0].role: user")
+            logger.info(f"  messages[0].content length: {len(user_message)}")
+            logger.info(f"  system parameter length: {len(system_prompt)}")
+            
+            logger.info("CALLING ANTHROPIC API...")
+            response = client.messages.create(
+                model="claude-sonnet-4-5",
+                max_tokens=max_tokens,
+                temperature=temperature,
+                messages=[{"role": "user", "content": user_message}],
+                system=system_prompt,
+                stream=True  # Enable streaming for large token limits
+            )
+            
+            logger.info("API RESPONSE RECEIVED - STREAMING")
+            logger.info(f"  response.type: {type(response)}")
+            
+            # Collect streamed content
+            content = ""
+            chunk_count = 0
+            for chunk in response:
+                chunk_count += 1
+                if chunk.type == "content_block_delta":
+                    if hasattr(chunk.delta, 'text'):
+                        content += chunk.delta.text
+                        if chunk_count % 10 == 0:  # Log every 10 chunks
+                            logger.info(f"  Received chunk {chunk_count}, content length: {len(content)}")
+            
+            logger.info(f"STREAMING COMPLETED: {chunk_count} chunks, {len(content)} total chars")
+            logger.info(f"  content type: {type(content)}")
+            logger.info(f"  content preview: {repr(content[:300])}")
+            
+            # Parse JSON response with detailed logging
+            logger.info("ATTEMPTING JSON PARSE...")
+            try:
+                logger.info(f"  Input to parse_llm_json: {len(content)} chars")
+                parsed = parse_llm_json(content)
+                logger.info(f"  JSON PARSE SUCCESS")
+                logger.info(f"  parsed type: {type(parsed)}")
+                if isinstance(parsed, dict):
+                    logger.info(f"  parsed keys: {list(parsed.keys())}")
+                    logger.info(f"  parsed keys count: {len(parsed.keys())}")
+                else:
+                    logger.warning(f"  parsed is not dict: {parsed}")
+                logger.info("=== Claude API Call COMPLETED SUCCESSFULLY ===")
+                return parsed
+            except Exception as parse_error:
+                logger.error(f"  JSON PARSE FAILED")
+                logger.error(f"  parse_error type: {type(parse_error)}")
+                logger.error(f"  parse_error message: {parse_error}")
+                logger.error(f"  content that failed: {repr(content[:500])}")
+                if attempt == 2:
+                    logger.error("  JSON parsing failed on final attempt - raising")
+                    raise
+                else:
+                    logger.info("  Will retry JSON parsing...")
+                    continue
+                
+        except Exception as e:
+            error_type = type(e).__name__
+            error_msg = str(e)
+            logger.error(f"API CALL FAILED")
+            logger.error(f"  error_type: {error_type}")
+            logger.error(f"  error_msg: {error_msg}")
+            
+            # Log detailed error information
+            if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"  HTTP response status: {e.response.status_code}")
+                logger.error(f"  HTTP response body: {e.response.text}")
+            if hasattr(e, 'request') and e.request is not None:
+                logger.error(f"  HTTP request info available")
+            
+            if attempt == 2:
+                logger.error("=== Claude API Call FAILED ON FINAL ATTEMPT ===")
+                raise
+            else:
+                logger.info("  Will retry API call...")
+                continue
+
+
+# ── File detection & preprocessing ────────────────────────────────────────────
+def detect_file_type(filename: str, content: str) -> str:
+    logger.info(f"=== detect_file_type STARTED ===")
+    logger.info(f"Filename: {filename}")
+    logger.info(f"Content length: {len(content)} chars")
+    
+    cl = content.lower()
+    fn = filename.lower()
+    logger.info(f"Lowercase filename: {fn}")
+    logger.info(f"Content preview: {cl[:100]}...")
+    
+    file_type = "unknown"
+    
+    if fn.startswith("pagerduty") or ('"incident"' in cl and '"severity"' in cl and '"urgency"' in cl):
+        file_type = "pagerduty_incident"
+        logger.info("Detected as pagerduty_incident")
+    elif fn.startswith("cloudwatch") or fn.startswith("app_logs") or ("loggroup" in cl or "logstream" in cl):
+        file_type = "cloudwatch_logs"
+        logger.info("Detected as cloudwatch_logs")
+    elif fn.startswith("prometheus") or ("metric" in cl and ("timestamp" in cl or "value" in cl)):
+        file_type = "prometheus_metrics"
+        logger.info("Detected as prometheus_metrics")
+    elif fn.startswith("github") or ("deployments" in cl and ("timestamp" in cl or "service" in cl)):
+        file_type = "github_deployments"
+        logger.info("Detected as github_deployments")
+    elif "slack" in fn or ("channel" in cl and "user" in cl and "ts" in cl):
+        file_type = "slack_thread"
+        logger.info("Detected as slack_thread")
+    elif "incident" in fn or ("summary" in cl and ("timeline" in cl or "impact" in cl)):
+        file_type = "incident_context"
+        logger.info("Detected as incident_context")
+    else:
+        logger.info("File type not matched, returning 'unknown'")
+    
+    logger.info(f"=== detect_file_type COMPLETED: {file_type} ===")
+    return file_type
+
+
+def _parse_prometheus(data: dict) -> list:
+    """Return [(name, labels_str, [(ts, val)])] from either Prometheus format."""
+    logger.info(f"=== _parse_prometheus STARTED ===")
+    logger.info(f"Input data keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
+    
+    result = []
+    
+    try:
+        if "metrics" in data:
+            logger.info("Processing 'metrics' format")
+            metrics = data["metrics"]
+            logger.info(f"Found {len(metrics)} metrics")
+            
+            for i, m in enumerate(metrics):
+                logger.info(f"Processing metric {i+1}/{len(metrics)}")
+                name = m.get("metric_name", "metric")
+                labels = ",".join(f"{k}={v}" for k, v in m.get("labels", {}).items())
+                values = [(v["timestamp"], float(v["value"])) for v in m.get("values", [])]
+                logger.info(f"Metric {name}: {len(values)} values")
+                result.append((name, labels, values))
+                
+        elif "data" in data and "result" in data["data"]:
+            logger.info("Processing Prometheus query API format")
+            for r in data["data"]["result"]:
+                name = r["metric"].get("__name__", "metric")
+                labels = ",".join(f"{k}={v}" for k, v in r["metric"].items() if k != "__name__")
+                values = [(v[0], float(v[1])) for v in r.get("values", [])]
+                logger.info(f"Metric {name}: {len(values)} values")
+                result.append((name, labels, values))
+        else:
+            logger.warning("Unknown Prometheus data format")
+            
+        logger.info(f"=== _parse_prometheus COMPLETED: {len(result)} metrics parsed ===")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error parsing Prometheus data: {e}")
+        logger.info("=== _parse_prometheus FAILED ===")
+        return []
+
+
+def _is_anomalous(val: float, baseline: float) -> bool:
+    logger.debug(f"Checking anomaly: val={val}, baseline={baseline}")
+    if baseline == 0:
+        is_anomalous = val > 0
+        logger.debug(f"Baseline=0, anomaly check: {is_anomalous}")
+        return is_anomalous
+    is_anomalous = val > 2 * baseline or val < 0.5 * baseline
+    logger.debug(f"Anomaly check result: {is_anomalous}")
+    return is_anomalous
+
+
+def summarize_metrics(content: str) -> str:
+    logger.info(f"=== summarize_metrics STARTED ===")
+    logger.info(f"Content length: {len(content)} chars")
+    
+    try:
+        data = json.loads(content)
+        logger.info("JSON parsed successfully")
+    except Exception as e:
+        logger.error(f"Failed to parse JSON: {e}")
+        return "Metrics parsing failed"
+    
+    sections = []
+    try:
+        for name, labels, values in _parse_prometheus(data):
+            logger.info(f"Processing metric: {name} with {len(values)} values")
+            if len(values) < 3:
+                logger.warning(f"Skipping {name}: insufficient values ({len(values)})")
+                continue
+            
+            baseline = (values[0][1] + values[1][1]) / 2
+            logger.info(f"Baseline for {name}: {baseline}")
+            
+            anomalies = []
+            for ts, val in values[2:]:
+                if _is_anomalous(val, baseline):
+                    anomalies.append((ts, val))
+                    logger.debug(f"Found anomaly in {name} at {ts}: {val}")
+            
+            if anomalies:
+                logger.info(f"Found {len(anomalies)} anomalies in {name}")
+                sections.append(f"{name}: {len(anomalies)} anomalies detected")
+            else:
+                logger.info(f"No anomalies found in {name}")
+                sections.append(f"{name}: normal")
+        
+        result = "; ".join(sections) if sections else "No metrics data"
+        logger.info(f"=== summarize_metrics COMPLETED: {result} ===")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error summarizing metrics: {e}")
+        logger.info("=== summarize_metrics FAILED ===")
+        return "Metrics summarization failed"
+
+
+def build_user_message(files_by_type: dict, deployment_flags: list = None) -> str:
+    logger.info(f"=== build_user_message STARTED ===")
+    logger.info(f"Input files: {list(files_by_type.keys())}")
+    logger.info(f"Deployment flags: {len(deployment_flags) if deployment_flags else 0} items")
+    
+    sections = []
+    order = [
+        ("pagerduty_incident",  "PAGERDUTY INCIDENT"),
+        ("cloudwatch_logs",     "CLOUDWATCH LOGS"),
+        ("prometheus_metrics",  "PROMETHEUS METRICS (pre-processed)"),
+        ("github_deployments",  "GITHUB DEPLOYMENTS"),
+        ("incident_context",    "INCIDENT CONTEXT (SLACK THREAD)"),
+    ]
+    
+    for ftype, label in order:
+        if ftype not in files_by_type:
+            logger.debug(f"Skipping {label} - not found in files")
+            continue
+        logger.info(f"Adding section: {label}")
+        content = files_by_type[ftype]
+        if ftype == "prometheus_metrics":
+            content = summarize_metrics(content)
+        sections.append(f"=== {label} ===\n{content}")
+    
+    if deployment_flags:
+        logger.info("Adding deployment correlation section")
+        sections.append(
+            "=== PRE-COMPUTED DEPLOYMENT CORRELATION ===\n"
+            + json.dumps(deployment_flags, indent=2)
+            + "\n\nUse this to inform root cause analysis, but verify with other sources before confirming causation."
+        )
+    else:
+        logger.debug("No deployment flags to add")
+    
+    result = "\n\n".join(sections)
+    logger.info(f"Built user message with {len(sections)} sections, total length: {len(result)} chars")
+    logger.info("=== build_user_message COMPLETED ===")
+    return result
+
+
+# ── Deployment correlation ─────────────────────────────────────────────────────
+def correlate_deployments(file_contents: dict) -> list:
+    logger.info("=== Deployment Correlation Started ===")
+    logger.info(f"Input files: {list(file_contents.keys())}")
+    
+    try:
+        pd_content = next((v for k, v in file_contents.items()
+                           if detect_file_type(k, v) == "pagerduty_incident"), None)
+        gh_content = next((v for k, v in file_contents.items()
+                           if detect_file_type(k, v) == "github_deployments"), None)
+        pm_content = next((v for k, v in file_contents.items()
+                           if detect_file_type(k, v) == "prometheus_metrics"), None)
+
+        logger.info(f"Found files - PagerDuty: {bool(pd_content)}, GitHub: {bool(gh_content)}, Prometheus: {bool(pm_content)}")
+
+        if not gh_content:
+            logger.info("No GitHub deployments found, returning empty list")
+            return []
+
+        onset_dt = None
+        alert_service = ""
+
+        if pd_content:
+            logger.info("Processing PagerDuty content for onset time")
+            try:
+                pd = json.loads(pd_content)
+                inc = pd.get("incident", {})
+                alert_service = inc.get("service", "").lower()
+                created = inc.get("created_at")
+                logger.info(f"PagerDuty service: {alert_service}, created_at: {created}")
+                if created:
+                    onset_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                    logger.info(f"Onset time from PagerDuty: {onset_dt}")
+            except Exception as e:
+                logger.error(f"Error processing PagerDuty content: {e}")
+
+        # Check Prometheus for an earlier signal
+        if pm_content:
+            logger.info("Checking Prometheus for earlier onset signal")
+            try:
+                pm_data = json.loads(pm_content)
+                for name, labels, values in _parse_prometheus(pm_data):
+                    if len(values) < 3:
+                        continue
+                    baseline = (values[0][1] + values[1][1]) / 2
+                    for ts, val in values[2:]:
+                        if _is_anomalous(val, baseline):
+                            try:
+                                ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                                if onset_dt is None or ts_dt < onset_dt:
+                                    onset_dt = ts_dt
+                                    logger.info(f"Earlier onset found in Prometheus: {onset_dt}")
+                            except Exception:
+                                pass
+                            break
+            except Exception as e:
+                logger.error(f"Error processing Prometheus content: {e}")
+
+        if onset_dt is None:
+            logger.info("No onset time detected, returning empty list")
+            return []
+
+        logger.info(f"Final onset time: {onset_dt}")
+        gh = json.loads(gh_content)
+        window_start = onset_dt - timedelta(minutes=60)
+        logger.info(f"Deployment correlation window: {window_start} to {onset_dt}")
+        
+        flagged = []
+
+        for deploy in gh.get("deployments", []):
+            ts_str = deploy.get("timestamp")
+            if not ts_str:
+                continue
+            try:
+                d_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            except Exception:
+                continue
+            if not (window_start <= d_dt <= onset_dt):
+                continue
+
+            mins_before = int((onset_dt - d_dt).total_seconds() / 60)
+            svc = deploy.get("service", "").lower()
+            same_svc = bool(alert_service and svc and (alert_service in svc or svc in alert_service))
+            
+            flagged.append({
+                "service":              deploy.get("service", "unknown"),
+                "title":                deploy.get("title", deploy.get("description", "Deployment")),
+                "author":               deploy.get("author", "unknown"),
+                "timestamp":            ts_str,
+                "minutes_before_onset": mins_before,
+                "same_service_as_alert": same_svc,
+                "relevance":            "HIGH" if same_svc else "LOW",
+                "pr_number":            deploy.get("pr_number"),
+                "description":          deploy.get("description", ""),
+            })
+            logger.info(f"Flagged deployment: {deploy.get('service')} - {mins_before}min before onset - {'HIGH' if same_svc else 'LOW'} relevance")
+
+        flagged.sort(key=lambda d: (0 if d["relevance"] == "HIGH" else 1, d["minutes_before_onset"]))
+        logger.info(f"Deployment correlation completed: {len(flagged)} deployments flagged")
+        return flagged
+    except Exception as e:
+        logger.error(f"Deployment correlation failed: {e}")
+        return []
+
+
+# ── Pipeline calls ─────────────────────────────────────────────────────────────
+def run_extraction(file_contents: dict, deployment_flags: list) -> dict:
+    logger.info("=== Extraction Pipeline Started ===")
+    logger.info(f"INPUT ANALYSIS: {len(file_contents)} files, {len(deployment_flags)} deployment flags")
+    logger.info(f"File names: {list(file_contents.keys())}")
+    
+    # Detect file types
+    file_types = {}
+    for filename, content in file_contents.items():
+        file_type = detect_file_type(filename, content)
+        file_types[filename] = file_type
+        logger.info(f"File type detected: {filename} -> {file_type}")
+    
+    # Build user message
+    logger.info("Building user message...")
+    user_message = build_user_message(file_contents, deployment_flags)
+    logger.info(f"Built user message, length: {len(user_message)} chars")
+    logger.info(f"CALLING EXTRACTION: user_message (len={len(user_message)}), system_prompt (len={len(EXTRACTION_SYSTEM_PROMPT)})")
+    
+    # Call Claude with configured token limit
+    result = call_claude(user_message, EXTRACTION_SYSTEM_PROMPT, max_tokens=TOKEN_LIMITS["extraction"])
+    logger.info(f"Extraction completed successfully with keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+    return result
+
+
+def run_generation(extraction: dict) -> dict:
+    logger.info("=== Generation Pipeline Started ===")
+    logger.info(f"INPUT ANALYSIS: extraction keys = {list(extraction.keys()) if isinstance(extraction, dict) else 'Not a dict'}")
+    
+    # Log extraction data in detail
+    if isinstance(extraction, dict):
+        logger.info("EXTRACTION DATA DUMP:")
+        for key, value in extraction.items():
+            if isinstance(value, dict):
+                logger.info(f"  {key}: dict with keys {list(value.keys())}")
+                # Log critical fields
+                if key == "incident_summary":
+                    logger.info(f"    incident_summary: {value}")
+                elif key == "affected_service":
+                    logger.info(f"    affected_service: {value}")
+                elif key == "security_function_impact":
+                    sfi = value
+                    logger.info(f"    security_function_impact:")
+                    logger.info(f"      primary_category: {sfi.get('primary_category', 'missing')}")
+                    logger.info(f"      detection_status: {sfi.get('detection_status', 'missing')}")
+                    logger.info(f"      remediation_status: {sfi.get('remediation_status', 'missing')}")
+                elif key == "timeline":
+                    tl = value
+                    logger.info(f"    timeline:")
+                    for tk, tv in tl.items():
+                        logger.info(f"      {tk}: {tv}")
+            elif isinstance(value, list):
+                logger.info(f"  {key}: list with {len(value)} items")
+            else:
+                logger.info(f"  {key}: {type(value)} = {str(value)[:100]}")
+    else:
+        logger.error(f"EXTRACTION IS NOT A DICT: {type(extraction)}")
+    
+    extraction_json = json.dumps(extraction, indent=2)
+    logger.info(f"Extraction JSON length: {len(extraction_json)} chars")
+    logger.info(f"CALLING GENERATION: extraction_json (len={len(extraction_json)}), system_prompt (len={len(GENERATION_SYSTEM_PROMPT)})")
+    
+    result = call_claude(extraction_json, GENERATION_SYSTEM_PROMPT, max_tokens=TOKEN_LIMITS["generation"])
+    logger.info(f"Generation completed successfully with keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+    return result
+
+
+# ── Inference log persistence ──────────────────────────────────────────────────
+def save_inference_log(extraction: dict) -> None:
+    logger.info("=== Saving Inference Log ===")
+    try:
+        log_dir = Path("inference_logs")
+        log_dir.mkdir(exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        log = {
+            "analysis_timestamp":     datetime.now(timezone.utc).isoformat(),
+            "incident_summary":       extraction.get("incident_summary", ""),
+            "severity":               extraction.get("severity", ""),
+            "pattern_classification": extraction.get("pattern_classification", {}),
+            "security_function_impact": extraction.get("security_function_impact", {}),
+            "inference_log":          extraction.get("inference_log", []),
+            "confidence_scores":      extraction.get("confidence_scores", {}),
+            "data_gaps":              extraction.get("data_gaps", []),
+        }
+        log_file = log_dir / f"{ts}.json"
+        log_file.write_text(json.dumps(log, indent=2))
+        logger.info(f"Inference log saved to: {log_file}")
+    except Exception as e:
+        logger.error(f"Failed to save inference log: {e}")
+        pass  # never crash the app on logging failure
+
+
+def load_inference_logs(limit: int = 5) -> list:
+    logger.info(f"=== Loading Inference Logs (limit={limit}) ===")
+    log_dir = Path("inference_logs")
+    if not log_dir.exists():
+        logger.info("Inference logs directory does not exist")
+        return []
+    logs = []
+    for f in sorted(log_dir.glob("*.json"), reverse=True)[:limit]:
+        try:
+            logs.append(json.loads(f.read_text()))
+            logger.info(f"Loaded inference log: {f}")
+        except Exception as e:
+            logger.error(f"Failed to load inference log {f}: {e}")
+            pass
+    logger.info(f"Loaded {len(logs)} inference logs")
+    return logs
+
+
+# ── Communications validation ─────────────────────────────────────────────────
+def validate_communications(comms: dict, extraction: dict = None) -> list:
+    logger.info("=== Communications Validation Started ===")
+    logger.info(f"Input communications keys: {list(comms.keys()) if isinstance(comms, dict) else 'Not a dict'}")
+
+    UNAFFECTED_KW  = ["not affected", "remain", "operating normally", "fully operational",
+                      "continue to", "not impacted", "not reporting issues", "unaffected",
+                      "still working", "remains fully"]
+    IMPACT_KW      = ["may experience", "experiencing", "some customers", "customers may",
+                      "impacted", "affected", "unable to", "slow", "errors", "unavailable",
+                      "degraded", "delays", "intermittent"]
+    TIMESTAMP_KW   = ["starting around", "starting at", "began", "as of", "pm pt", "am pt",
+                      "utc", "pacific", "approximately"]
+    NEXT_UPDATE_KW = ["within", "next update", "will provide", "monitoring", "update in",
+                      "keep you informed", "will continue"]
+    ACTION_KW      = ["no action", "contact support", "please reach out", "if you experience",
+                      "continue to experience", "support team", "no action required"]
+    # SFI checks
+    DETECTION_CONFIRM_KW  = ["detection", "email security", "threat protection",
+                              "threat detection", "email scanning", "security scanning"]
+    FALSE_REASSURANCE_KW  = ["detection remain fully", "detection remains fully",
+                              "detection continue to", "threat detection remain",
+                              "email security remain fully", "detection is fully operational"]
+
+    # Pull SFI data once (used per-comm below)
+    sfi = (extraction or {}).get("security_function_impact", {})
+    det_status = sfi.get("detection_status", "unknown")
+
+    warnings = []
+    communications_list = comms.get("communications", [])
+    logger.info(f"Found {len(communications_list)} communications to validate")
+
+    for i, comm in enumerate(communications_list):
+        stage = comm.get("stage", "unknown")
+        msg = comm.get("message", "").lower()
+        logger.info(f"Validating stage {i+1}: {stage}, message length: {len(msg)}")
+
+        if not any(kw in msg for kw in UNAFFECTED_KW):
+            warnings.append({"stage": stage, "field": "What's not affected",
+                              "severity": "high",
+                              "detail": "Critical for a security vendor — must state what continues to work."})
+            logger.warning(f"Missing 'unaffected' field in {stage}")
+        if not any(kw in msg for kw in IMPACT_KW):
+            warnings.append({"stage": stage, "field": "Customer impact",
+                              "severity": "medium",
+                              "detail": "Should describe what customers are experiencing."})
+            logger.warning(f"Missing 'impact' field in {stage}")
+        if not any(kw in msg for kw in TIMESTAMP_KW):
+            warnings.append({"stage": stage, "field": "Timestamp",
+                              "severity": "medium",
+                              "detail": "Should state when the issue started."})
+            logger.warning(f"Missing 'timestamp' field in {stage}")
+        if stage != "resolved" and not any(kw in msg for kw in NEXT_UPDATE_KW):
+            warnings.append({"stage": stage, "field": "Next update commitment",
+                              "severity": "medium",
+                              "detail": "Should tell customers when to expect the next update."})
+            logger.warning(f"Missing 'next update' field in {stage}")
+        if stage not in ("investigating",) and not any(kw in msg for kw in ACTION_KW):
+            warnings.append({"stage": stage, "field": "Customer action",
+                              "severity": "medium",
+                              "detail": "Should state what customers should do (usually 'No action required')."})
+            logger.warning(f"Missing 'customer action' field in {stage}")
+
+        # SFI check 1: detection confirmed operational — must say so
+        if det_status == "fully_operational" and not any(kw in msg for kw in DETECTION_CONFIRM_KW):
+            warnings.append({"stage": stage, "field": "Detection status confirmation",
+                              "severity": "high",
+                              "detail": "Detection is confirmed operational — must explicitly reassure customers of this for a security product."})
+            logger.warning(f"Missing detection confirmation in {stage} (det_status=fully_operational)")
+
+        # SFI check 2: detection degraded/offline — must not falsely reassure
+        if det_status in ("degraded", "offline") and any(kw in msg for kw in FALSE_REASSURANCE_KW):
+            warnings.append({"stage": stage, "field": "False detection reassurance",
+                              "severity": "high",
+                              "detail": "CRITICAL ERROR: Communication states detection is operational when it is degraded/offline. Remove false reassurance immediately."})
+            logger.warning(f"False detection reassurance detected in {stage} (det_status={det_status})")
+
+    logger.info(f"Validation completed: {len(warnings)} warnings found")
+    return warnings
+
+
+# ── Evidence Trace constants ──────────────────────────────────────────────────
+_ET_LABELS = {
+    "what_is_broken":     "What's broken?",
+    "what_caused_it":     "What caused it?",
+    "when_did_it_happen": "When did it happen?",
+    "what_is_not_broken": "What's not broken?",
+    "how_bad_is_it":      "How bad is it?",
+}
+# Maps each ET question to the confidence_scores key that best represents it
+_ET_CONF_KEY = {
+    "what_is_broken":     "customer_impact",
+    "what_caused_it":     "root_cause",
+    "when_did_it_happen": "timeline",
+    "what_is_not_broken": "scope",
+    "how_bad_is_it":      "customer_impact",
+}
+_PUBLISH_CHECKS = [
+    "Affected service is correct",
+    "Root cause is correct (or confirmed as unconfirmed)",
+    "Timeline boundaries are correct",
+    "'Unaffected' claims are accurate for this security product",
+    "Generated communications reviewed for tone and accuracy",
+]
+_EXPECTED_FILE_TYPES = {
+    "pagerduty_incident": "Alert severity, service name, onset time",
+    "cloudwatch_logs":    "Error details, stack traces, service-level failures",
+    "prometheus_metrics": "Quantitative onset/recovery times, baseline comparison",
+    "github_deployments": "Deployment correlation, causal candidates",
+    "incident_context":   "Engineer discussion, root cause confirmation, Slack thread",
+}
+
+
+def _format_comms_for_copy(comms: dict) -> str:
+    """Format communications as plain text for clipboard copy."""
+    lines = [f"=== {comms.get('title', 'Incident')} ===", ""]
+    for c in comms.get("communications", []):
+        stage = c.get("stage", "").title()
+        posted = c.get("posted_at_pt", "")
+        msg = c.get("message", "")
+        lines += [f"[{stage}]  {posted}", msg, ""]
+    return "\n".join(lines)
+
+
+def render_evidence_trace(extraction: dict, comms: dict, file_contents: dict) -> None:
+    """Show the five verification cards and pre-publish checklist."""
+    et = extraction.get("evidence_trace", [])
+    if not et:
+        return
+
+    # ── Session state init (safe to call on every rerun) ──
+    if "verify_status" not in st.session_state or st.session_state.verify_status is None:
+        st.session_state.verify_status = {item.get("question", ""): "unverified" for item in et}
+    if "verify_notes" not in st.session_state or st.session_state.verify_notes is None:
+        st.session_state.verify_notes = {item.get("question", ""): "" for item in et}
+    if "publish_checks" not in st.session_state or st.session_state.publish_checks is None:
+        st.session_state.publish_checks = {c: False for c in _PUBLISH_CHECKS}
+
+    st.markdown("### 🛡️ Verify Before Publishing")
+
+    # ── Stale data warning ──
+    tl = extraction.get("timeline", {})
+    ts_str = tl.get("detection_time_utc") or tl.get("onset_time_utc")
+    if ts_str:
+        try:
+            ts_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            age_h = (datetime.now(timezone.utc) - ts_dt).total_seconds() / 3600
+            if age_h > 24:
+                st.warning(
+                    f"⏰ Analysis based on data from **{ts_dt.strftime('%b %d, %Y %H:%M UTC')}** "
+                    f"({int(age_h)}h ago). If the incident is still active, re-upload current data."
+                )
+        except Exception:
+            pass
+
+    # ── Summary bar ──
+    statuses = [st.session_state.verify_status.get(item.get("question", ""), "unverified") for item in et]
+    n_ver = statuses.count("verified")
+    n_dis = statuses.count("disputed")
+    n_unv = statuses.count("unverified")
+    bar_color = "#dc2626" if n_dis else ("#d97706" if n_unv else "#059669")
+    st.markdown(
+        f'<div style="background:#f8fafc;border:1px solid #e2e8f0;border-left:4px solid {bar_color};'
+        f'border-radius:8px;padding:0.7rem 1rem;margin-bottom:1rem;color:#334155;">'
+        f'<b>{n_ver}/5</b> verified &nbsp;·&nbsp; '
+        f'<b style="color:#dc2626">{n_dis}</b> disputed &nbsp;·&nbsp; '
+        f'<b style="color:#94a3b8">{n_unv}</b> unverified'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    if n_dis:
+        st.warning("⚠️ Disputed claims should be resolved before publishing.")
+
+    # ── 5 verification cards ──
+    conf_scores = extraction.get("confidence_scores", {})
+    for item in et:
+        q = item.get("question", "")
+        label    = _ET_LABELS.get(q, q.replace("_", " ").title())
+        conclusion = item.get("conclusion", "")
+        evidence   = item.get("evidence", [])
+        counter    = item.get("counter_evidence", [])
+        suggestion = item.get("verification_suggestion", "")
+
+        conf_val   = conf_scores.get(_ET_CONF_KEY.get(q, ""), "")
+        conf_emoji = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(conf_val, "⚪")
+        v_status   = st.session_state.verify_status.get(q, "unverified")
+        s_icon     = {"verified": "✅", "disputed": "❌", "unverified": "⬜"}.get(v_status, "⬜")
+
+        with st.expander(f"{s_icon} **{label}** {conf_emoji}", expanded=False):
+            st.markdown(f"**Conclusion:** {conclusion}")
+
+            # Toggle buttons
+            bc1, bc2, bc3 = st.columns(3)
+            if bc1.button("✅ Verified",  key=f"ev_ver_{q}"):
+                st.session_state.verify_status[q] = "verified"
+                st.rerun()
+            if bc2.button("❌ Disputed",  key=f"ev_dis_{q}"):
+                st.session_state.verify_status[q] = "disputed"
+                st.rerun()
+            if bc3.button("⬜ Reset",     key=f"ev_rst_{q}"):
+                st.session_state.verify_status[q] = "unverified"
+                st.session_state.verify_notes[q]  = ""
+                st.rerun()
+
+            if v_status == "disputed":
+                note = st.text_input(
+                    "What's wrong with this conclusion?",
+                    value=st.session_state.verify_notes.get(q, ""),
+                    key=f"ev_note_{q}",
+                )
+                st.session_state.verify_notes[q] = note
+
+            # Supporting evidence
+            if evidence:
+                st.markdown("**Supporting Evidence**")
+                for ev in evidence:
+                    st.markdown(f"📄 `{ev.get('source_file', '')}`  ·  {ev.get('relevance', '')}")
+                    st.code(ev.get("raw_excerpt", ""), language="text")
+
+            # Counter-evidence (amber tint via minimal inline style)
+            if counter:
+                st.markdown("**Counter-Evidence** *(weakens or contradicts the conclusion)*")
+                for ev in counter:
+                    st.markdown(
+                        f'<div style="background:#fffbeb;border-left:3px solid #f59e0b;'
+                        f'padding:4px 10px;border-radius:4px;margin-bottom:4px;'
+                        f'font-size:12px;color:#78350f;">⚠️ {ev.get("source_file","")}'
+                        f' — {ev.get("relevance","")}</div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.code(ev.get("raw_excerpt", ""), language="text")
+
+            if suggestion:
+                st.markdown(f"_💡 To verify: {suggestion}_")
+
+    # ── Data availability ──
+    st.markdown("---")
+    st.markdown("**Data available for this analysis**")
+    detected_types = {detect_file_type(fn, fc) for fn, fc in (file_contents or {}).items()}
+    missing = [(t, d) for t, d in _EXPECTED_FILE_TYPES.items() if t not in detected_types]
+    if missing:
+        for ftype, desc in missing:
+            st.caption(f"⬜ **{ftype}** not uploaded — {desc} unavailable. Related confidence is reduced.")
+    else:
+        st.caption("✅ All 5 standard data sources were available for this analysis.")
+
+    # ── Internal → customer language mapping ──
+    internal_terms = extraction.get("internal_details_to_exclude", [])
+    customer_desc  = extraction.get("customer_impact", {}).get("description", "")
+    if internal_terms and customer_desc:
+        with st.expander("🔤 Internal → Customer Language Mapping", expanded=False):
+            st.caption("Internal terms found in source data, mapped to customer-facing language:")
+            st.markdown(f"**Internal:** `{'`, `'.join(internal_terms)}`")
+            st.markdown(f"**Customer-facing:** _{customer_desc}_")
+
+    # ── Pre-publish checklist ──
+    st.markdown("---")
+    st.markdown("### ✔️ Ready to Publish?")
+    all_checked = True
+    for check in _PUBLISH_CHECKS:
+        val = st.checkbox(
+            check,
+            value=st.session_state.publish_checks.get(check, False),
+            key=f"pub_{check}",
+        )
+        st.session_state.publish_checks[check] = val
+        if not val:
+            all_checked = False
+
+    can_publish = all_checked and n_dis == 0
+    st.markdown("")
+    if can_publish:
+        st.success("✅ All items verified — ready to copy.")
+        st.code(_format_comms_for_copy(comms), language="text")
+    elif n_dis:
+        st.error("❌ Resolve disputed claims before publishing.")
+    else:
+        remaining = sum(1 for v in st.session_state.publish_checks.values() if not v)
+        st.info(f"Complete {remaining} remaining checklist item(s) to enable copy.")
+
+
+# ── Date helper ───────────────────────────────────────────────────────────────
+def _extract_date_label(extraction: dict) -> str:
+    tl = extraction.get("timeline", {})
+    ts = tl.get("detection_time_utc") or tl.get("onset_time_utc")
+    if ts:
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            pt_offset = -7 if 3 <= dt.month <= 10 else -8
+            pt = dt.astimezone(timezone(timedelta(hours=pt_offset)))
+            return pt.strftime("%B %d, %Y")
+        except Exception:
+            pass
+    return "Today"
+
+
+# ── Status page renderer ──────────────────────────────────────────────────────
+def render_status_page(comms: dict, extraction: dict) -> None:
+    logger.info(f"=== render_status_page STARTED ===")
+    logger.info(f"Comms keys: {list(comms.keys()) if isinstance(comms, dict) else 'Not a dict'}")
+    logger.info(f"Extraction keys: {list(extraction.keys()) if isinstance(extraction, dict) else 'Not a dict'}")
+    
+    try:
+        severity = extraction.get("customer_impact", {}).get("severity_assessment", "degraded_performance")
+        logger.info(f"Severity assessment: {severity}")
+        
+        dot_class = {"degraded_performance": "dot-yellow", "partial_outage": "dot-orange",
+                       "full_outage": "dot-red"}.get(severity, "dot-yellow")
+        badge_class = {"degraded_performance": "badge-degraded", "partial_outage": "badge-outage",
+                       "full_outage": "badge-outage"}.get(severity, "badge-degraded")
+
+        communications = comms.get("communications", [])
+        is_resolved = bool(communications) and communications[-1].get("stage") == "resolved"
+        if is_resolved:
+            dot_class, badge_class = "dot-green", "badge-resolved"
+        badge_text = "Resolved" if is_resolved else severity.replace("_", " ").title()
+        logger.info(f"Dot class: {dot_class}, badge: {badge_class}")
+
+        # Security function impact badge
+        sfi = extraction.get("security_function_impact", {})
+        det_status = sfi.get("detection_status", "unknown")
+        rem_status = sfi.get("remediation_status", "unknown")
+        if det_status in ("degraded", "offline"):
+            sfi_badge_cls, sfi_badge_txt = "sfi-badge-detection", "Detection Impact"
+        elif rem_status in ("degraded", "offline"):
+            sfi_badge_cls, sfi_badge_txt = "sfi-badge-remediation", "Remediation Impact"
+        elif det_status == "fully_operational" and rem_status == "fully_operational":
+            sfi_badge_cls, sfi_badge_txt = "sfi-badge-operational", "Security Functions Operational"
+        else:
+            sfi_badge_cls, sfi_badge_txt = "sfi-badge-unknown", "Security Status Unconfirmed"
+
+        incident_date = _extract_date_label(extraction)
+        logger.info(f"Incident date: {incident_date}")
+
+        # Build updates HTML — newest first, with stage label classes and <br> for newlines
+        updates_html = ""
+        reversed_comms = list(reversed(communications))
+        for i, comm in enumerate(reversed_comms):
+            stage = comm.get("stage", "unknown")
+            posted = comm.get("posted_at_pt", "")
+            message = comm.get("message", "").replace("\n", "<br>")
+            is_last = (i == len(reversed_comms) - 1)
+            extra_cls = " status-update-last" if is_last else ""
+            logger.info(f"Rendering communication: {stage} at {posted}")
+            updates_html += f"""
+        <div class="status-update{extra_cls}">
+          <div class="stage-label stage-{stage}">{stage.title()}</div>
+          <div class="update-message">{message}</div>
+          <div class="update-timestamp">{posted}</div>
+        </div>"""
+
+        st.markdown(f"""
+    <div class="status-container">
+      <div class="overall-status">
+        <span class="badge {badge_class}">{badge_text}</span>
+        <span class="sfi-badge {sfi_badge_cls}">{sfi_badge_txt}</span>
+      </div>
+      <div class="date-label">{incident_date}</div>
+      <div class="incident-card">
+        <div class="incident-title">
+          <span class="dot {dot_class}"></span>
+          {comms.get("title", "Incident")}
+        </div>
+        {updates_html}
+      </div>
+    </div>""", unsafe_allow_html=True)
+        
+        logger.info("=== render_status_page COMPLETED ===")
+        
+    except Exception as e:
+        logger.error(f"Error in render_status_page: {e}")
+        logger.info("=== render_status_page FAILED ===")
+        st.error(f"Error rendering status page: {e}")
+
+
+def render_structured_analysis(extraction: dict) -> None:
+    logger.info(f"=== render_structured_analysis STARTED ===")
+    logger.info(f"Extraction keys: {list(extraction.keys()) if isinstance(extraction, dict) else 'Not a dict'}")
+    
+    try:
+        with st.expander("📋 Structured Incident Analysis", expanded=False):
+            # ── Security Function Status (top of expander) ──
+            sfi = extraction.get("security_function_impact", {})
+            if sfi:
+                st.markdown("**Security Function Status**")
+                STATUS_CLS  = {"fully_operational": "sfi-operational", "degraded": "sfi-degraded",
+                               "offline": "sfi-offline", "unknown": "sfi-unknown"}
+                STATUS_ICON = {"fully_operational": "🟢", "degraded": "🟡",
+                               "offline": "🔴", "unknown": "⚪"}
+                STATUS_LBL  = {"fully_operational": "Fully Operational", "degraded": "Degraded",
+                               "offline": "Offline", "unknown": "Unknown"}
+                det_s = sfi.get("detection_status", "unknown")
+                rem_s = sfi.get("remediation_status", "unknown")
+                c1, c2 = st.columns(2)
+                with c1:
+                    dcls = STATUS_CLS.get(det_s, "sfi-unknown")
+                    st.markdown(
+                        f'<div class="sfi-status {dcls}">{STATUS_ICON.get(det_s,"⚪")} '
+                        f'Detection: {STATUS_LBL.get(det_s,"Unknown")}</div>',
+                        unsafe_allow_html=True)
+                with c2:
+                    rcls = STATUS_CLS.get(rem_s, "sfi-unknown")
+                    st.markdown(
+                        f'<div class="sfi-status {rcls}">{STATUS_ICON.get(rem_s,"⚪")} '
+                        f'Remediation: {STATUS_LBL.get(rem_s,"Unknown")}</div>',
+                        unsafe_allow_html=True)
+                pc = sfi.get("primary_category", "")
+                conf = sfi.get("confidence", "")
+                if pc:
+                    conf_emoji = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(conf, "⚪")
+                    st.markdown(f"**Category:** {pc.title()}"
+                                + (f" &nbsp; {conf_emoji} {conf} confidence" if conf else ""))
+                if sfi.get("reasoning"):
+                    st.caption(sfi["reasoning"])
+                st.markdown("---")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Timeline**")
+                timeline = extraction.get("timeline", {})
+                logger.info(f"Timeline entries: {len(timeline)}")
+                for key, val in timeline.items():
+                    if val:
+                        label = key.replace("_utc", "").replace("_", " ").title()
+                        st.markdown(f"- **{label}:** {val}")
+                st.markdown("**Root Cause**")
+                rc = extraction.get("root_cause", {})
+                logger.info(f"Root cause keys: {list(rc.keys())}")
+                st.markdown(f"- **Status:** {rc.get('status', 'unknown')}")
+                st.markdown(f"- **Summary:** {rc.get('summary', 'N/A')}")
+            with col2:
+                st.markdown("**Confidence Scores**")
+                scores = extraction.get("confidence_scores", {})
+                logger.info(f"Confidence scores: {list(scores.keys())}")
+                for key, val in scores.items():
+                    emoji = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(val, "⚪")
+                    st.markdown(f"- **{key.title()}:** {emoji} {val}")
+                st.markdown("**Data Gaps**")
+                gaps = extraction.get("data_gaps", [])
+                logger.info(f"Data gaps: {len(gaps)}")
+                for gap in gaps:
+                    st.markdown(f"- ⚠️ {gap}")
+            st.markdown("**Internal Details Excluded**")
+            excluded = extraction.get("internal_details_to_exclude", [])
+            logger.info(f"Internal details excluded: {len(excluded)}")
+            st.code(", ".join(excluded) if excluded else "None identified")
+        
+        logger.info("=== render_structured_analysis COMPLETED ===")
+        
+    except Exception as e:
+        logger.error(f"Error in render_structured_analysis: {e}")
+        logger.info("=== render_structured_analysis FAILED ===")
+        st.error(f"Error rendering structured analysis: {e}")
+
+
+def render_pattern_analysis(extraction: dict) -> None:
+    logger.info(f"=== render_pattern_analysis STARTED ===")
+    
+    try:
+        pc = extraction.get("pattern_classification", {})
+        il = extraction.get("inference_log", [])
+        logger.info(f"Pattern classification: {bool(pc)}, Inference log entries: {len(il)}")
+        
+        if not pc and not il:
+            logger.info("No pattern data to display")
+            return
+
+        with st.expander("🔬 Pattern Analysis & Inference Log", expanded=False):
+            if pc:
+                pattern = pc.get("primary_pattern", "unknown").replace("_", " ").title()
+                conf = pc.get("confidence", "unknown")
+                conf_emoji = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(conf, "⚪")
+                st.markdown(f"**Detected Pattern:** {pattern} &nbsp; {conf_emoji} {conf} confidence")
+                st.markdown(f"_{pc.get('reasoning', '')}_")
+                logger.info(f"Pattern: {pattern}, confidence: {conf}")
+
+            if il:
+                st.markdown("---")
+                st.markdown("**Inference Chain**")
+                type_icon = {
+                    "direct_observation": "📌",
+                    "cross_reference": "🔗",
+                    "absence_of_evidence": "❓",
+                    "engineer_confirmation": "✅",
+                }
+                for i, entry in enumerate(il):
+                    icon = type_icon.get(entry.get("inference_type", ""), "•")
+                    conf = entry.get("confidence", "")
+                    conf_emoji = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(conf, "⚪")
+                    sources = ", ".join(entry.get("sources", []))
+                    st.markdown(f"{icon} **{entry.get('claim', '')}** &nbsp; {conf_emoji}")
+                    if sources:
+                        st.caption(f"Sources: {sources}")
+                    logger.info(f"Inference {i+1}: {entry.get('inference_type')} - {entry.get('claim', '')[:50]}...")
+
+            # Recent incident history
+            past_logs = load_inference_logs(limit=6)
+            logger.info(f"Loaded {len(past_logs)} past logs")
+            # Filter out the current one (same summary)
+            current_summary = extraction.get("incident_summary", "")
+            past_logs = [l for l in past_logs if l.get("incident_summary") != current_summary]
+            logger.info(f"After filtering current incident: {len(past_logs)} past logs")
+            
+            if past_logs:
+                st.markdown("---")
+                st.markdown("**Recent Incident Patterns**")
+                for log in past_logs[:5]:
+                    p = log.get("pattern_classification", {}).get("primary_pattern", "unknown")
+                    summary = log.get("incident_summary", "")[:80] + ("…" if len(log.get("incident_summary", "")) > 80 else "")
+                    st.markdown(f"- **{p.replace('_', ' ').title()}** — {summary}")
+        
+        logger.info("=== render_pattern_analysis COMPLETED ===")
+        
+    except Exception as e:
+        logger.error(f"Error in render_pattern_analysis: {e}")
+        logger.info("=== render_pattern_analysis FAILED ===")
+        st.error(f"Error rendering pattern analysis: {e}")
+
+
+def render_validation(warnings: list) -> None:
+    logger.info(f"=== render_validation STARTED ===")
+    logger.info(f"Warnings to render: {len(warnings)}")
+    
+    try:
+        high = [w for w in warnings if w["severity"] == "high"]
+        medium = [w for w in warnings if w["severity"] == "medium"]
+        logger.info(f"High severity warnings: {len(high)}, Medium severity warnings: {len(medium)}")
+
+        if not warnings:
+            logger.info("No warnings - showing success message")
+            st.markdown('<div class="val-pass">✅ All communications pass required field validation.</div>',
+                        unsafe_allow_html=True)
+            logger.info("=== render_validation COMPLETED ===")
+            return
+
+        for w in high:
+            logger.warning(f"High severity warning: {w['stage']} - {w['field']}")
+            st.error(f"**[{w['stage'].title()}] Missing: {w['field']}** — {w['detail']} *(Critical for security vendor)*")
+
+        if medium:
+            logger.info(f"Showing {len(medium)} medium warnings in expander")
+            with st.expander(f"⚠️ {len(medium)} medium-severity field warning(s)", expanded=False):
+                for w in medium:
+                    logger.info(f"Medium warning: {w['stage']} - {w['field']}")
+                    st.warning(f"**[{w['stage'].title()}] Missing: {w['field']}** — {w['detail']}")
+        
+        logger.info("=== render_validation COMPLETED ===")
+        
+    except Exception as e:
+        logger.error(f"Error in render_validation: {e}")
+        logger.info("=== render_validation FAILED ===")
+        st.error(f"Error rendering validation: {e}")
+
+
+def render_deployment_alerts(flags: list) -> None:
+    logger.info(f"=== render_deployment_alerts STARTED ===")
+    logger.info(f"Deployment flags to render: {len(flags)}")
+    
+    try:
+        if not flags:
+            logger.info("No deployment flags to display")
+            return
+            
+        high_flags = [f for f in flags if f["relevance"] == "HIGH"]
+        low_flags  = [f for f in flags if f["relevance"] == "LOW"]
+        logger.info(f"High relevance flags: {len(high_flags)}, Low relevance flags: {len(low_flags)}")
+
+        for f in high_flags:
+            logger.info(f"Rendering HIGH alert: {f['service']} - {f['title']}")
+            pr = f"PR #{f['pr_number']}" if f.get("pr_number") else ""
+            st.warning(
+                f"⚠️ **Deployment detected {f['minutes_before_onset']}min before incident onset**\n\n"
+                f"- **Service:** {f['service']}\n"
+                f"- **Title:** {f['title']} {pr}\n"
+                f"- **Author:** {f['author']}\n"
+                f"- **Time:** {f['timestamp']}\n"
+                f"_Same service as alert - potential cause_"
+            )
+
+        if low_flags:
+            logger.info(f"Showing {len(low_flags)} low relevance flags in expander")
+            with st.expander(f"{len(low_flags)} other deployment(s) in time window (different service)", expanded=False):
+                for f in low_flags:
+                    logger.info(f"Low flag: {f['service']} - {f['title']}")
+                    st.markdown(f"- **{f['service']}** — {f['title']} ({f['minutes_before_onset']}min before onset)")
+        
+        logger.info("=== render_deployment_alerts COMPLETED ===")
+        
+    except Exception as e:
+        logger.error(f"Error in render_deployment_alerts: {e}")
+        logger.info("=== render_deployment_alerts FAILED ===")
+        st.error(f"Error rendering deployment alerts: {e}")
+
+
+# ── Sample data loader ────────────────────────────────────────────────────────
+def load_sample_data():
+    logger.info("=== Loading Sample Data ===")
+    data_dir = Path("data")
+    if not data_dir.exists():
+        logger.warning(f"Data directory {data_dir} does not exist")
+        return {}
+    
+    files = {
+        fp.name: fp.read_text(encoding="utf-8")
+        for fp in data_dir.glob("*")
+        if fp.is_file() and fp.suffix in (".json", ".txt")
+        and fp.name != ".DS_Store"
+    }
+    logger.info(f"Loaded {len(files)} sample files: {list(files.keys())}")
+    return files
+
+# ── Main app ──────────────────────────────────────────────────────────────────
+def main():
+    logger.info("=== MAIN FUNCTION STARTED ===")
+    
+    st.markdown("""
+    <div class="main-header">
+        <h1>🚨 Incident Communications Generator</h1>
+        <p>Transform raw incident data into professional status page communications</p>
+    </div>""", unsafe_allow_html=True)
+
+    # Session state init
+    logger.info("Initializing session state...")
+    for key, default in [
+        ("step", "upload"), ("extraction", None), ("comms", None),
+        ("error", None), ("uploaded_files", None), ("sample_data", None),
+        ("deployment_flags", None), ("validation_warnings", None),
+        ("verify_status", None), ("verify_notes", None), ("publish_checks", None),
+    ]:
+        if key not in st.session_state:
+            st.session_state[key] = default
+            logger.info(f"Initialized session state {key} = {default}")
+        else:
+            logger.info(f"Session state {key} already exists = {st.session_state[key]}")
+
+    if st.session_state.step == "upload":
+        st.session_state.error = None
+
+    # Error banner
+    if st.session_state.error:
+        logger.error(f"Showing error banner: {st.session_state.error}")
+        st.error(f"**Error:** {st.session_state.error}")
+        if st.button("🔄 Try Again"):
+            logger.info("User clicked 'Try Again' - clearing error and resetting to upload step")
+            st.session_state.error = None
+            st.session_state.step = "upload"
+            st.rerun()
+
+    # Progress indicator
+    steps = [
+        ("upload",     "📤 Upload Files",  "Upload incident data files"),
+        ("processing", "⚡ Processing",    "AI analysis and generation"),
+        ("results",    "✨ Results",       "View generated communications"),
+    ]
+    current_idx = next(i for i, (s, _, _) in enumerate(steps) if s == st.session_state.step)
+    logger.info(f"Current step: {st.session_state.step} (index {current_idx})")
+    
+    st.markdown("### Progress")
+    for i, (step, icon, desc) in enumerate(steps):
+        cls = "completed" if i < current_idx else ("active" if i == current_idx else "")
+        suffix = " ✓" if i < current_idx else (" →" if i == current_idx else "")
+        st.markdown(f'<div class="progress-step {cls}">{icon} {desc}{suffix}</div>',
+                    unsafe_allow_html=True)
+
+    # ── Step 1: Upload ──────────────────────────────────────────────────────
+    if st.session_state.step == "upload":
+        logger.info("=== STEP 1: UPLOAD ===")
+        st.markdown("### 📤 Upload Incident Data")
+        
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            st.markdown("""
+            <div class="info-card">
+                <h3>📋 Supported Files</h3>
+                <ul>
+                    <li><strong>incident_context.txt</strong> — Slack threads / engineer notes</li>
+                    <li><strong>cloudwatch_logs.json</strong> — Application logs</li>
+                    <li><strong>prometheus_metrics.json</strong> — System metrics</li>
+                    <li><strong>pagerduty_incident.json</strong> — Alert data</li>
+                    <li><strong>github_deployments.json</strong> — Deployment history</li>
+                </ul>
+                <p><em>Not all files required — pipeline works with any subset.</em></p>
+            </div>""", unsafe_allow_html=True)
+
+        with col2:
+            st.markdown('<div class="info-card"><h3>🎯 Quick Start</h3><p>Try with sample data instantly.</p></div>',
+                        unsafe_allow_html=True)
+            if st.button("🚀 Load Sample Data", type="secondary", use_container_width=True):
+                logger.info("User clicked 'Load Sample Data'")
+                sample = load_sample_data()
+                if sample:
+                    st.session_state.sample_data = sample
+                    logger.info(f"Loaded {len(sample)} sample files: {list(sample.keys())}")
+                    st.success(f"✅ Loaded {len(sample)} sample files")
+                else:
+                    logger.warning("No sample data found")
+                    st.error("❌ No sample data found in 'data/' directory")
+
+        uploaded = st.file_uploader(
+            "Upload incident data files (JSON / TXT)",
+            type=["json", "txt"],
+            accept_multiple_files=True,
+        )
+        # Read content immediately — file objects become unreadable after rerun
+        if uploaded:
+            logger.info(f"User uploaded {len(uploaded)} files")
+            st.session_state.uploaded_files = {f.name: f.read().decode("utf-8") for f in uploaded}
+            logger.info(f"Stored uploaded files: {list(st.session_state.uploaded_files.keys())}")
+
+        if st.session_state.uploaded_files or st.session_state.sample_data:
+            st.markdown("---")
+            _, col, _ = st.columns([1, 2, 1])
+            with col:
+                if st.button("🚀 Analyze Incident", type="primary", use_container_width=True):
+                    logger.info("=== 'Analyze Incident' BUTTON CLICKED ===")
+                    logger.info(f"BEFORE CLICK - Session state:")
+                    logger.info(f"  step: {st.session_state.step}")
+                    logger.info(f"  uploaded_files exists: {st.session_state.uploaded_files is not None}")
+                    logger.info(f"  sample_data exists: {st.session_state.sample_data is not None}")
+                    logger.info(f"  extraction exists: {st.session_state.extraction is not None}")
+                    logger.info(f"  comms exists: {st.session_state.comms is not None}")
+                    logger.info(f"  error exists: {st.session_state.error is not None}")
+                    
+                    if st.session_state.uploaded_files:
+                        logger.info(f"  uploaded_files keys: {list(st.session_state.uploaded_files.keys())}")
+                        for k, v in st.session_state.uploaded_files.items():
+                            logger.info(f"    {k}: {len(v)} chars")
+                    
+                    logger.info("CHANGING STEP TO 'processing'")
+                    st.session_state.step = "processing"
+                    logger.info(f"AFTER STEP CHANGE - step: {st.session_state.step}")
+                    logger.info("TRIGGERING RERUN...")
+                    st.rerun()
+
+    # ── Step 2: Processing ──────────────────────────────────────────────────
+    elif st.session_state.step == "processing":
+        logger.info("=== PROCESSING STEP ENTRY ===")
+        logger.info("FULL SESSION STATE DUMP:")
+        for key in ["step", "extraction", "comms", "error", "uploaded_files", "sample_data", "deployment_flags", "validation_warnings"]:
+            value = getattr(st.session_state, key, None)
+            if value is not None:
+                if isinstance(value, dict):
+                    logger.info(f"  {key}: dict with {len(value)} keys: {list(value.keys())}")
+                elif isinstance(value, list):
+                    logger.info(f"  {key}: list with {len(value)} items")
+                else:
+                    logger.info(f"  {key}: {type(value)} = {str(value)[:100]}")
+            else:
+                logger.info(f"  {key}: None")
+        
+        logger.info(f"SESSION STATE CHECK: extraction={st.session_state.extraction is not None}, comms={st.session_state.comms is not None}")
+        
+        # Guard: already done (rerun triggered before state advanced)
+        if st.session_state.extraction is not None and st.session_state.comms is not None:
+            logger.info("GUARD TRIGGERED: Processing already completed, advancing to results")
+            logger.info(f"Before step change: step={st.session_state.step}")
+            st.session_state.step = "results"
+            logger.info(f"After step change: step={st.session_state.step}")
+            logger.info("TRIGGERING RERUN FROM GUARD...")
+            st.rerun()
+            return
+
+        logger.info("FILE CONTENTS VALIDATION...")
+        file_contents = st.session_state.sample_data or st.session_state.uploaded_files
+        if not file_contents:
+            logger.error("VALIDATION FAILED: No file contents found in session state")
+            logger.error(f"Session state details:")
+            logger.error(f"  sample_data is None: {st.session_state.sample_data is None}")
+            logger.error(f"  uploaded_files is None: {st.session_state.uploaded_files is None}")
+            st.error("❌ No files found. Please upload files or load sample data.")
+            logger.info("RESETING STEP TO 'upload' due to missing files")
+            st.session_state.step = "upload"
+            st.rerun()
+            return
+
+        logger.info(f"FILE VALIDATION PASSED: {len(file_contents)} files found")
+        for filename, content in file_contents.items():
+            logger.info(f"  {filename}: {len(content)} chars, type={type(content)}")
+        
+        logger.info(f"DISPLAYING PROCESSING UI FOR FILES: {list(file_contents.keys())}")
+        st.markdown("### ⚡ Processing Incident Data")
+        for fn in file_contents:
+            st.markdown(f"- **{fn}**")
+        st.markdown("---")
+
+        logger.info("CREATING PROGRESS BAR AND STATUS...")
+        bar = st.progress(0)
+        status = st.empty()
+        logger.info("UI ELEMENTS CREATED, STARTING PROCESSING PIPELINE...")
+
+        try:
+            logger.info("=== PROCESSING PIPELINE STARTED ===")
+            
+            status.text("🔎 Running deployment correlation...")
+            bar.progress(10)
+            logger.info("STEP 1: Deployment correlation...")
+            deployment_flags = correlate_deployments(file_contents)
+            st.session_state.deployment_flags = deployment_flags
+            logger.info(f"Deployment correlation completed: {len(deployment_flags)} flags")
+
+            status.text("🔍 Extracting incident facts...")
+            bar.progress(30)
+            logger.info("STEP 2: Running extraction...")
+            extraction = run_extraction(file_contents, deployment_flags)
+            st.session_state.extraction = extraction
+            logger.info(f"Extraction completed: {type(extraction)} with keys {list(extraction.keys()) if isinstance(extraction, dict) else 'Not a dict'}")
+            
+            logger.info("STEP 3: Saving inference log...")
+            save_inference_log(extraction)
+            bar.progress(60)
+            logger.info("Inference log saved")
+
+            status.text("📝 Generating communications...")
+            bar.progress(75)
+            logger.info("STEP 4: Running generation...")
+            comms = run_generation(extraction)
+            st.session_state.comms = comms
+            logger.info(f"Generation completed: {type(comms)} with keys {list(comms.keys()) if isinstance(comms, dict) else 'Not a dict'}")
+            bar.progress(90)
+
+            status.text("✔ Validating communications...")
+            logger.info("STEP 5: Running validation...")
+            st.session_state.validation_warnings = validate_communications(comms, extraction)
+            bar.progress(100)
+            logger.info(f"Validation completed: {len(st.session_state.validation_warnings)} warnings")
+
+            status.text("✅ Complete!")
+            logger.info("=== PROCESSING COMPLETED SUCCESSFULLY ===")
+            logger.info(f"FINAL STATE: step=results, extraction={st.session_state.extraction is not None}, comms={st.session_state.comms is not None}")
+            st.session_state.step = "results"
+            st.rerun()
+
+        except Exception as e:
+            logger.error("=== PROCESSING EXCEPTION CAUGHT ===")
+            logger.error(f"EXCEPTION DETAILS:")
+            logger.error(f"  exception type: {type(e).__name__}")
+            logger.error(f"  exception message: {str(e)}")
+            logger.error(f"  exception args: {e.args}")
+            
+            # Log full traceback
+            import traceback
+            logger.error(f"  TRACEBACK:")
+            for line in traceback.format_exc().split('\n'):
+                if line.strip():
+                    logger.error(f"    {line}")
+            
+            # Log session state at time of failure
+            logger.error(f"SESSION STATE AT FAILURE:")
+            logger.error(f"  step: {st.session_state.step}")
+            logger.error(f"  extraction: {type(st.session_state.extraction)} = {st.session_state.extraction is not None}")
+            logger.error(f"  comms: {type(st.session_state.comms)} = {st.session_state.comms is not None}")
+            logger.error(f"  error: {type(st.session_state.error)} = {st.session_state.error}")
+            logger.error(f"  uploaded_files: {type(st.session_state.uploaded_files)} = {st.session_state.uploaded_files is not None}")
+            
+            # Store error and reset
+            error_string = str(e)
+            logger.error(f"STORING ERROR IN SESSION STATE: {error_string}")
+            st.session_state.error = error_string
+            
+            logger.error(f"RESETING STEP TO 'upload'")
+            st.session_state.step = "upload"
+            logger.error(f"FINAL STEP BEFORE RERUN: {st.session_state.step}")
+            logger.error("TRIGGERING RERUN DUE TO EXCEPTION...")
+            st.rerun()
+
+    # ── Step 3: Results ─────────────────────────────────────────────────────
+    elif st.session_state.step == "results":
+        logger.info("=== STEP 3: RESULTS ===")
+        if not (st.session_state.comms and st.session_state.extraction):
+            logger.error("Missing comms or extraction in results step, resetting to upload")
+            st.session_state.step = "upload"
+            st.rerun()
+            return
+
+        logger.info("Rendering results page...")
+        st.markdown("### ✨ Generated Communications")
+
+        # Deployment alerts above status page
+        render_deployment_alerts(st.session_state.get("deployment_flags") or [])
+
+        # Status page
+        render_status_page(st.session_state.comms, st.session_state.extraction)
+
+        # Evidence trace & human-in-the-loop verification
+        _et_files = st.session_state.sample_data or st.session_state.uploaded_files or {}
+        render_evidence_trace(st.session_state.extraction, st.session_state.comms, _et_files)
+
+        # Required-fields validation
+        st.markdown("#### Communication Validation")
+        render_validation(st.session_state.get("validation_warnings") or [])
+
+        # Pattern analysis + inference log
+        render_pattern_analysis(st.session_state.extraction)
+
+        # Structured extraction details
+        render_structured_analysis(st.session_state.extraction)
+
+        st.markdown("---")
+        _, col, _ = st.columns([1, 2, 1])
+        with col:
+            if st.button("🔄 Start Over", use_container_width=True):
+                logger.info("User clicked 'Start Over' - resetting session state")
+                for key in ("step", "extraction", "comms", "error",
+                            "uploaded_files", "sample_data",
+                            "deployment_flags", "validation_warnings",
+                            "verify_status", "verify_notes", "publish_checks"):
+                    st.session_state[key] = None if key != "step" else "upload"
+                st.rerun()
+
+    logger.info("=== MAIN FUNCTION COMPLETED ===")
+    logger.info(f"Final session state step: {st.session_state.step}")
+
+
+if __name__ == "__main__":
+    logger.info("=== APP ENTRY POINT ===")
+    main()

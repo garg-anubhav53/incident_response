@@ -28,3 +28,10 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Generated at runtime (ephemeral on Railway, no need to commit)
+inference_logs/
+output/
+communications/
+comms_data/
+comms_test_data_regional/
