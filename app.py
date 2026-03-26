@@ -291,7 +291,7 @@ CRITICAL RULES:
 9. Severity: degraded_performance = works but slow, most requests succeed; partial_outage = significant error rate but partially functional; full_outage = nearly all requests failing.
 10. Timeline: use EARLIEST corroborating signal for onset (often metrics, before the alert). Use LATEST confirmation for resolution (post-monitoring). Alert time = detection, not onset.
 11. PATTERN CLASSIFICATION: Classify into exactly one primary pattern. Definitions — deployment_induced: code/config deploy correlates with onset AND confirmed by engineers or rollback fixed it; infrastructure_cascade: multiple services fail simultaneously, no deployment trigger; regional_failure: errors scoped to a specific region; portal_auth_failure: UI/login errors but core processing (email, detection) unaffected; third_party_dependency: errors reference external APIs (Microsoft Graph, AWS, etc.) with no internal cause; integration_api_failure: outbound webhooks/SIEM/SOAR failing, core product fine; silent_degradation: no hard errors but quality metrics drift; isolated_environment: Gov/FedRAMP-scoped. If ambiguous, pick the stronger pattern and explicitly note the alternative in reasoning. NOTE: portal_auth_failure is INCOMPATIBLE with detection_status=degraded/offline — portal issues do not impair detection. Flag any such combination in data_gaps.
-12. INFERENCE LOG: For every factual claim in the analysis, log the inference chain. inference_type values: direct_observation (fact explicitly stated in one source), cross_reference (derived by correlating multiple sources), absence_of_evidence (conclusion based on what's NOT in the data), engineer_confirmation (engineers explicitly agreed in Slack). This log is the audit trail — be thorough.
+12. INFERENCE LOG: Log the inference chain for key factual claims only — not every observation. inference_type values: direct_observation (fact explicitly stated in one source), cross_reference (derived by correlating multiple sources), absence_of_evidence (conclusion based on what's NOT in the data), engineer_confirmation (engineers explicitly agreed in Slack). Cap at 10 entries total. Priority: (1) all engineer_confirmation entries, (2) cross_reference entries where multiple sources were correlated, (3) direct_observation for root cause, onset time, and recovery only. Include absence_of_evidence only when the absence materially affects confidence in a high-stakes claim. Omit trivial observations such as "no resolved timestamp was found" or restatements of alert data.
 13. SECURITY FUNCTION CLASSIFICATION: Classify what security function is impacted. Detection signals: IES/email scanning errors, threat scoring failures, ML model errors, ATO monitoring failures, AIPC errors, engineers mentioning missed threats. Remediation signals: quarantine/deletion errors, Microsoft Graph failures, SOAR errors, threats detected but automated response broken. Other signals: portal/auth errors (detection unaffected), SIEM delivery, EPR, notification delays, infrastructure confirmed not impacting security pipeline. CRITICAL safeguards — (a) For ambiguous service names (api-gateway, platform), classify from symptoms and engineer discussion, NOT service name alone. (b) If engineers confirm detection unaffected, set detection_status=fully_operational. (c) If uncertain whether detection is impacted, set detection_status=unknown and add to data_gaps — NEVER default to fully_operational when uncertain. (d) When ambiguous, classify toward higher severity: detection > remediation > other.
 14. EVIDENCE TRACE: For each of the 5 verification questions (what_is_broken, what_caused_it, when_did_it_happen, what_is_not_broken, how_bad_is_it), cite specific raw evidence from the source data. Requirements: (a) raw_excerpt must be verbatim — copy exact log lines, exact Slack messages with author+timestamp, exact metric values as "metric_name: value at timestamp." Never paraphrase. (b) For metrics, cite baseline values, first anomalous value, peak, and recovery point as specific timestamp-value pairs from the RAW ANOMALOUS VALUES section if present. (c) Always populate counter_evidence — include anything that weakens the conclusion, even if later dismissed. Empty array only if truly nothing contradicts. (d) For what_is_not_broken: do NOT merely list service names that seem fine. Cite a specific absence: "No errors appear for [service] in [filename] during the incident window" — OR cite an explicit engineer statement. If you cannot find either, use a single evidence item with raw_excerpt="No error data found for this service in any provided source" and relevance="Absence of evidence — weaker than positive confirmation." Never claim a service is unaffected based solely on its name. (e) verification_suggestion must be a specific action the IC can complete in under 2 minutes (check a named dashboard, ask a specific person, run a specific query — never a generic "review logs").
 
@@ -381,7 +381,10 @@ Return ONLY valid JSON, no markdown fencing:
 # ── Generation system prompt ───────────────────────────────────────────────────
 GENERATION_SYSTEM_PROMPT = """You are a status page communications writer for an enterprise SaaS security company. Generate customer-facing status page updates from a structured incident analysis.
 
-Write in 4 stages: Investigating, Identified, Monitoring, Resolved. A fast-resolved incident may skip Identified and Monitoring. If root_cause.status is "unknown", skip the Identified stage — do not write an Identified update without a root cause to reference.
+Write in 2–4 stages: Investigating, Identified, Monitoring, Resolved. Always generate Investigating and Resolved. Apply these skip rules strictly — fewer stages is better than padding with low-information updates:
+- SKIP Identified if: root_cause.status is "unknown" OR root_cause.status is "hypothesized" with low or medium confidence. Never write an Identified stage without a confirmed or high-confidence root cause.
+- SKIP Monitoring if: the incident resolved within 30 minutes of mitigation, OR mitigation_time_utc and resolved_time_utc are within 15 minutes, OR both are null (fast rollback or unknown timeline). When detection or remediation was impaired, Monitoring is valuable — keep it in those cases regardless of timing.
+- Return only the stages that apply. Do NOT return empty-string entries or placeholder objects for skipped stages.
 
 VOICE AND TONE:
 - Professional, calm, direct. No panic, no minimizing.
@@ -1324,13 +1327,13 @@ def render_status_page(comms: dict, extraction: dict) -> None:
         det_status = sfi.get("detection_status", "unknown")
         rem_status = sfi.get("remediation_status", "unknown")
         if det_status in ("degraded", "offline"):
-            sfi_color, sfi_text = "red", "⚠️ Detection Impacted — threats may not be detected"
+            sfi_color, sfi_text = "red", "⚠️ Detection Impacted"
         elif rem_status in ("degraded", "offline"):
-            sfi_color, sfi_text = "orange", "⚠️ Remediation Impacted — threats detected but automated response delayed"
+            sfi_color, sfi_text = "orange", "⚠️ Remediation Impacted"
         elif det_status == "fully_operational" and rem_status == "fully_operational":
-            sfi_color, sfi_text = "green", "✅ Detection & Remediation Fully Operational"
+            sfi_color, sfi_text = "green", "✅ Detection & Remediation Operational"
         else:
-            sfi_color, sfi_text = "gray", "❓ Security Function Status Unconfirmed (not enough data to assess)"
+            sfi_color, sfi_text = "gray", "❓ Security Status Unconfirmed"
 
         # ── Duration ───────────────────────────────────────────────────────────
         duration_str = ""
@@ -1358,19 +1361,19 @@ def render_status_page(comms: dict, extraction: dict) -> None:
         with c2:
             st.markdown(f":{sfi_color}[{sfi_text}]")
 
-        st.caption(
-            f"📅 {incident_date}   "
-            "**Left badge:** incident severity.   "
-            "**Right badge:** whether email detection or automated remediation are impacted "
-            "(most critical for a security product — red = customers may be exposed to threats)."
+        st.markdown(
+            f'<p style="font-size:13px;color:#64748b;margin:0.25rem 0 0.75rem 0;">'
+            f'📅 {incident_date} &nbsp;·&nbsp; Right badge: security function impact (red = detection may be down)</p>',
+            unsafe_allow_html=True,
         )
 
         st.markdown(f"**{comms.get('title', 'Incident')}**")
-        st.caption(
-            "Word count shown after each stage label — "
-            ":green[green ≤ 100 words (target)], "
-            ":orange[amber ≤ 110 (acceptable)], "
-            ":red[red > 110 (trim needed)]."
+        st.markdown(
+            '<p style="font-size:13px;color:#64748b;margin:0 0 0.5rem 0;">'
+            '<span style="color:#16a34a;">■</span> ≤100w &nbsp;'
+            '<span style="color:#d97706;">■</span> ≤110w &nbsp;'
+            '<span style="color:#dc2626;">■</span> >110w — word count per message</p>',
+            unsafe_allow_html=True,
         )
 
         # ── Stage messages ─────────────────────────────────────────────────────
@@ -1856,55 +1859,44 @@ def main():
             return
 
         def _zone(label: str, sublabel: str = "") -> None:
-            sub_html = f'<span style="font-size:11px;font-weight:400;color:#94a3b8;margin-left:8px;">{sublabel}</span>' if sublabel else ""
+            sub_html = f'<span style="font-size:12px;font-weight:400;color:#94a3b8;margin-left:10px;">{sublabel}</span>' if sublabel else ""
             st.markdown(
-                f'<div style="font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;'
-                f'color:#64748b;padding:0.6rem 0 0.3rem 0;border-bottom:1px solid #e2e8f0;'
-                f'margin:1.5rem 0 1rem 0;">{label}{sub_html}</div>',
+                f'<div style="font-size:13px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;'
+                f'color:#475569;padding:0.6rem 0 0.3rem 0;border-bottom:2px solid #cbd5e1;'
+                f'margin:2rem 0 0.75rem 0;">{label}{sub_html}</div>',
                 unsafe_allow_html=True,
             )
 
-        st.caption(
-            "**How to use this page:** "
-            "① Review the status page draft below. "
-            "② Check that it passes quality checks (Zone 3). "
-            "③ Verify each factual claim in the IC Verification section. "
-            "④ Complete the pre-publish checklist to unlock the copy button."
-        )
+        def _note(text: str) -> None:
+            """Inline hint — larger than st.caption, smaller than body."""
+            st.markdown(
+                f'<p style="font-size:13px;color:#64748b;margin:0 0 0.75rem 0;">{text}</p>',
+                unsafe_allow_html=True,
+            )
 
-        # ── Zone 1: Context ──────────────────────────────────────────────────
-        _zone("① Pre-Flight Context", "deployments near incident onset")
-        st.caption(
-            "Deployments flagged within 60 min before onset (potential causes) "
-            "and 30 min after (potential worsening factors). "
-            "**HIGH** = same service as the alert. **LOW** = different service. "
-            "The AI has already factored these into its root cause analysis."
-        )
-        render_deployment_alerts(st.session_state.get("deployment_flags") or [])
+        _note("① Review the draft → ② Check quality flags → ③ Verify evidence → ④ Complete checklist → Copy.")
 
-        # ── Zone 2: Status Page Output ───────────────────────────────────────
-        _zone("② Status Page Draft", "AI-generated communications — review before publishing")
-        st.caption(
-            "These are the draft status page messages the AI generated from your incident data, "
-            "newest stage first. Each stage represents a point in the incident timeline. "
-            "Read them top to bottom to see how the incident story unfolds."
-        )
+        # ── Zone 1: Context ─────────────────────────────────────────────────
+        # Only show if there are deployment flags to display
+        _deployment_flags = st.session_state.get("deployment_flags") or []
+        if _deployment_flags:
+            _zone("① Pre-Flight Context", "deployments near onset")
+            _note("HIGH = same service as alert, pre-onset. LOW = different service. POST-ONSET = possible worsening factor.")
+            render_deployment_alerts(_deployment_flags)
+
+        # ── Zone 2: Status Page Draft ─────────────────────────────────────────
+        _zone("② Status Page Draft", "newest stage first")
         render_status_page(st.session_state.comms, st.session_state.extraction)
 
         # ── Zone 3: Quality Checks ───────────────────────────────────────────
-        _zone("③ Quality Checks", "automated validation of required fields")
-        st.caption(
-            "The AI checks each message for required content. "
-            "**Red** = critical missing field that must be fixed before publishing "
-            "(e.g. no mention of what's NOT affected — required for a security product). "
-            "**Yellow** = recommended fix. "
-            "**Green** = all checks passed."
-        )
+        _consistency_flags = st.session_state.get("consistency_flags") or []
+        _validation_warnings = st.session_state.get("validation_warnings") or []
+        _has_quality_issues = bool(_consistency_flags) or bool(_validation_warnings)
 
-        # Extraction consistency flags (cross-checks between pattern and SFI)
-        consistency_flags = st.session_state.get("consistency_flags") or []
-        if consistency_flags:
-            for cf in consistency_flags:
+        if _has_quality_issues:
+            _zone("③ Quality Checks", "required fields validation")
+            _note("Red = must fix before publishing. Yellow = recommended.")
+            for cf in _consistency_flags:
                 sev = cf.get("severity", "medium")
                 detail = cf.get("detail", "")
                 field  = cf.get("field", "")
@@ -1912,32 +1904,23 @@ def main():
                     st.error(f"**Logic conflict — {field}:** {detail}")
                 else:
                     st.warning(f"**Logic conflict — {field}:** {detail}")
-
-        render_validation(st.session_state.get("validation_warnings") or [])
+            render_validation(_validation_warnings)
+        else:
+            _zone("③ Quality Checks", "all clear")
+            st.success("✅ All communications pass required field and consistency validation.")
 
         # ── Zone 4: IC Verification ──────────────────────────────────────────
-        _zone("④ IC Verification", "verify AI reasoning before publishing")
-        st.caption(
-            "The AI answers 5 key questions an incident commander must confirm before publishing. "
-            "Each card shows the AI's conclusion and the raw evidence it used. "
-            "Mark each as **✅ Verified** (you agree) or **❌ Disputed** (something is wrong). "
-            "All 5 must be verified and none disputed to unlock the copy button. "
-            "Cards with disputed claims auto-expand."
-        )
+        _zone("④ IC Verification", "verify before publishing")
+        _note("5 questions the AI answered from raw evidence. Mark Verified ✅ or Disputed ❌. All 5 must be verified to unlock copy.")
         _et_files = st.session_state.sample_data or st.session_state.uploaded_files or {}
         render_evidence_trace(st.session_state.extraction, st.session_state.comms, _et_files)
 
         # ── Zone 5: Analyst View (collapsed by default) ──────────────────────
-        _zone("Analyst View", "optional — incident pattern classification and inference log")
-        st.caption(
-            "How the AI classified this incident (e.g. deployment-induced, infrastructure cascade) "
-            "and the chain of evidence behind each factual claim. Useful for audit trails and trend analysis."
-        )
+        _zone("Analyst View", "optional")
         render_pattern_analysis(st.session_state.extraction)
 
         # ── Zone 6: Raw Extraction (collapsed by default) ────────────────────
-        _zone("Raw Extraction Data", "optional — full structured output from AI")
-        st.caption("The complete structured JSON the AI extracted. Useful for debugging or integrating with other tools.")
+        _zone("Raw Extraction Data", "optional")
         render_structured_analysis(st.session_state.extraction)
 
         st.markdown("---")
