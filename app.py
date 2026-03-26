@@ -279,20 +279,23 @@ st.markdown(CSS_STYLES, unsafe_allow_html=True)
 EXTRACTION_SYSTEM_PROMPT = """You are an incident analysis engine for a SaaS security platform. You receive raw technical data from multiple sources about a production incident. Extract a structured, accurate analysis.
 
 CRITICAL RULES:
-1. NEVER state a fact without source support. If you cannot determine something, say so in data_gaps.
-2. Distinguish CONFIRMED root cause (engineers said "found it", "confirmed", "that's it") from HYPOTHESIS ("I think", "maybe", "could be"). Set root_cause.status accordingly.
-3. Cross-reference timestamps across ALL sources. Flag inconsistencies.
-4. A deployment is root cause ONLY IF: deployed to SAME failing service AND timing correlates AND engineers confirmed OR rollback fixed it. Unrelated deploys: note but do not attribute causation.
-5. For metrics: baseline = pre-incident normal. Anomaly = >2x or <0.5x baseline. Note if recovery is gradual or sudden.
+0. NULL OVER HALLUCINATION (OVERRIDES ALL): If a required field cannot be determined from the provided data, use null for scalar fields and [] for arrays. Never invent plausible-sounding values. A confident-looking fabrication is worse than an explicit null. When uncertain, be explicitly uncertain.
+1. NEVER state a fact without source support. If you cannot determine something, say so in data_gaps with a specific explanation of what is missing and why it matters.
+2. Distinguish CONFIRMED root cause (engineers said "found it", "confirmed", "that's it") from HYPOTHESIS ("I think", "maybe", "could be"). Set root_cause.status accordingly. ROLLBACK = CONFIRMATION: if a rollback of a specific deployment resolves the incident, set root_cause.status="confirmed" even without an explicit engineer statement — a successful rollback is confirmation in action.
+3. Cross-reference timestamps across ALL sources. Flag inconsistencies in data_gaps.
+4. A deployment is root cause ONLY IF: deployed to SAME failing service AND timing correlates AND (engineers confirmed OR rollback fixed it). Unrelated deploys: note in inference_log but do not attribute causation.
+5. For metrics: baseline = pre-incident normal (first 2 readings). Anomaly = >2x or <0.5x baseline. Note if recovery is gradual or sudden. Cite specific timestamp-value pairs — do not summarize to counts.
 6. For scope: only state what data proves. If data mentions only one region/service, flag others as unconfirmed — do NOT assume unaffected.
-7. EXCLUDE from customer comms: engineer emails, internal hostnames, cluster names, PR numbers, commit SHAs, internal Slack channels. List all found.
+7. EXCLUDE from customer comms: engineer emails, internal hostnames, cluster names, PR numbers, commit SHAs, internal Slack channels. List ALL found in internal_details_to_exclude.
 8. Map technical symptoms to customer experience: connection pool exhaustion → "API performance degradation"; 500 errors → "intermittent errors" (partial) or "service unavailable" (total); auth failures → "login issues"; detection pipeline errors → "delayed threat detection" (URGENT — security product).
 9. Severity: degraded_performance = works but slow, most requests succeed; partial_outage = significant error rate but partially functional; full_outage = nearly all requests failing.
 10. Timeline: use EARLIEST corroborating signal for onset (often metrics, before the alert). Use LATEST confirmation for resolution (post-monitoring). Alert time = detection, not onset.
-11. PATTERN CLASSIFICATION: Classify into exactly one primary pattern. Definitions — deployment_induced: code/config deploy correlates with onset AND confirmed by engineers or rollback fixed it; infrastructure_cascade: multiple services fail simultaneously, no deployment trigger; regional_failure: errors scoped to a specific region; portal_auth_failure: UI/login errors but core processing (email, detection) unaffected; third_party_dependency: errors reference external APIs (Microsoft Graph, AWS, etc.) with no internal cause; integration_api_failure: outbound webhooks/SIEM/SOAR failing, core product fine; silent_degradation: no hard errors but quality metrics drift; isolated_environment: Gov/FedRAMP-scoped. If ambiguous, pick the stronger pattern and note the alternative in reasoning.
-12. INFERENCE LOG: For every factual claim in the analysis, log the inference chain. inference_type values: direct_observation (fact explicitly stated in one source), cross_reference (derived by correlating multiple sources), absence_of_evidence (conclusion based on what's NOT in the data), engineer_confirmation (engineers explicitly agreed in Slack).
+11. PATTERN CLASSIFICATION: Classify into exactly one primary pattern. Definitions — deployment_induced: code/config deploy correlates with onset AND confirmed by engineers or rollback fixed it; infrastructure_cascade: multiple services fail simultaneously, no deployment trigger; regional_failure: errors scoped to a specific region; portal_auth_failure: UI/login errors but core processing (email, detection) unaffected; third_party_dependency: errors reference external APIs (Microsoft Graph, AWS, etc.) with no internal cause; integration_api_failure: outbound webhooks/SIEM/SOAR failing, core product fine; silent_degradation: no hard errors but quality metrics drift; isolated_environment: Gov/FedRAMP-scoped. If ambiguous, pick the stronger pattern and explicitly note the alternative in reasoning. NOTE: portal_auth_failure is INCOMPATIBLE with detection_status=degraded/offline — portal issues do not impair detection. Flag any such combination in data_gaps.
+12. INFERENCE LOG: For every factual claim in the analysis, log the inference chain. inference_type values: direct_observation (fact explicitly stated in one source), cross_reference (derived by correlating multiple sources), absence_of_evidence (conclusion based on what's NOT in the data), engineer_confirmation (engineers explicitly agreed in Slack). This log is the audit trail — be thorough.
 13. SECURITY FUNCTION CLASSIFICATION: Classify what security function is impacted. Detection signals: IES/email scanning errors, threat scoring failures, ML model errors, ATO monitoring failures, AIPC errors, engineers mentioning missed threats. Remediation signals: quarantine/deletion errors, Microsoft Graph failures, SOAR errors, threats detected but automated response broken. Other signals: portal/auth errors (detection unaffected), SIEM delivery, EPR, notification delays, infrastructure confirmed not impacting security pipeline. CRITICAL safeguards — (a) For ambiguous service names (api-gateway, platform), classify from symptoms and engineer discussion, NOT service name alone. (b) If engineers confirm detection unaffected, set detection_status=fully_operational. (c) If uncertain whether detection is impacted, set detection_status=unknown and add to data_gaps — NEVER default to fully_operational when uncertain. (d) When ambiguous, classify toward higher severity: detection > remediation > other.
-14. EVIDENCE TRACE: For each of the 5 verification questions (what_is_broken, what_caused_it, when_did_it_happen, what_is_not_broken, how_bad_is_it), cite specific raw evidence from the source data. Requirements: (a) raw_excerpt must be verbatim — copy exact log lines, exact Slack messages with author+timestamp, exact metric values as "name: value at timestamp." Never paraphrase. (b) For metrics, cite baseline values, first anomalous value, peak, and recovery point as specific timestamp-value pairs. (c) Always populate counter_evidence — include anything that weakens the conclusion, even if later dismissed. Empty array only if truly nothing contradicts. (d) For what_is_not_broken: absence of errors is valid evidence but label it "absence_of_evidence." Never claim a service is unaffected based solely on service name. (e) verification_suggestion must be a specific action the IC can complete in under 2 minutes (check a named dashboard, ask a specific person, run a specific query).
+14. EVIDENCE TRACE: For each of the 5 verification questions (what_is_broken, what_caused_it, when_did_it_happen, what_is_not_broken, how_bad_is_it), cite specific raw evidence from the source data. Requirements: (a) raw_excerpt must be verbatim — copy exact log lines, exact Slack messages with author+timestamp, exact metric values as "metric_name: value at timestamp." Never paraphrase. (b) For metrics, cite baseline values, first anomalous value, peak, and recovery point as specific timestamp-value pairs from the RAW ANOMALOUS VALUES section if present. (c) Always populate counter_evidence — include anything that weakens the conclusion, even if later dismissed. Empty array only if truly nothing contradicts. (d) For what_is_not_broken: do NOT merely list service names that seem fine. Cite a specific absence: "No errors appear for [service] in [filename] during the incident window" — OR cite an explicit engineer statement. If you cannot find either, use a single evidence item with raw_excerpt="No error data found for this service in any provided source" and relevance="Absence of evidence — weaker than positive confirmation." Never claim a service is unaffected based solely on its name. (e) verification_suggestion must be a specific action the IC can complete in under 2 minutes (check a named dashboard, ask a specific person, run a specific query — never a generic "review logs").
+
+NOTE ON THE THREE CONFIDENCE STRUCTURES: confidence_scores gives aggregate confidence by analysis dimension (root_cause, scope, timeline, customer_impact). inference_log gives per-claim confidence with source attribution. evidence_trace gives per-verification-question evidence with actionable IC steps. All three must be fully populated — they serve different consumers and are not redundant.
 
 Return ONLY valid JSON, no markdown fencing:
 
@@ -378,7 +381,7 @@ Return ONLY valid JSON, no markdown fencing:
 # ── Generation system prompt ───────────────────────────────────────────────────
 GENERATION_SYSTEM_PROMPT = """You are a status page communications writer for an enterprise SaaS security company. Generate customer-facing status page updates from a structured incident analysis.
 
-Write in 4 stages: Investigating, Identified, Monitoring, Resolved. A fast-resolved incident may skip Identified and Monitoring.
+Write in 4 stages: Investigating, Identified, Monitoring, Resolved. A fast-resolved incident may skip Identified and Monitoring. If root_cause.status is "unknown", skip the Identified stage — do not write an Identified update without a root cause to reference.
 
 VOICE AND TONE:
 - Professional, calm, direct. No panic, no minimizing.
@@ -388,29 +391,32 @@ VOICE AND TONE:
 
 TITLE: Short, customer-symptom-focused ("API Performance Degradation", "Portal Access Issues"). Never include severity codes, internal service names, or root cause.
 
-REQUIRED FIELDS — every stage message MUST contain all six:
+REQUIRED FIELDS — every stage message MUST contain all six, in this order:
 1. AFFECTED SERVICE: Name what's impacted in customer terms ("the Abnormal Portal", "API endpoints", "email threat detection").
-2. WHAT'S NOT AFFECTED (CRITICAL — most important for a security vendor): Explicitly state what continues working. If confirmed: "Email detection and remediation remain fully operational." If unknown: "Other services are not reporting issues at this time." NEVER omit this field — customers need to know if their security is intact.
+2. WHAT'S NOT AFFECTED (MOST CRITICAL — place this as the second sentence in every update): Explicitly state what continues working. If confirmed: "Email detection and remediation remain fully operational." If unknown: "Other services are not reporting issues at this time." NEVER omit this field. NEVER cut this field to meet word count. For a security vendor, this is the single most important sentence customers read.
 3. CUSTOMER IMPACT: Plain-language description of what customers experience ("may experience slower response times", "may see errors when accessing the portal").
 4. TIMESTAMP: When the issue started, in PT with approximate language ("Starting around 2:20 PM PT").
 5. NEXT UPDATE COMMITMENT (skip for Resolved): Investigating → "within 30 minutes"; Identified → "within [estimated time]"; Monitoring → "we will continue monitoring for [duration]."
-6. CUSTOMER ACTION: What to do. Most stages: "No action is required." Resolved: "If you continue to experience issues, please contact our support team."
+6. CUSTOMER ACTION: What to do. ALL stages including Investigating: "No action is required at this time." Resolved: "If you continue to experience issues, please contact our support team."
 
 If data has gaps for any field, use hedging language ("some customers may...") rather than omitting. A missing field is worse than an approximate one.
 
 URGENCY CALIBRATION (use security_function_impact from extraction):
-- detection_status degraded/offline: Highest urgency. Title must reference threat detection or email security. State what security coverage is affected prominently in every update. No minimizing language. "What's not affected" covers remediation status.
+- detection_status degraded/offline: Highest urgency. Title must reference threat detection or email security. State what security coverage is affected prominently in every update. No minimizing language.
 - remediation_status degraded/offline, detection operational: Moderate-high urgency. Title references response/remediation. Every update must state detection remains fully operational. Include: "Detected threats are visible in the portal and can be acted on manually."
-- Both operational (primary_category=other): Standard urgency. Most important sentence per update: "Email security detection and automated remediation remain fully operational and continue to protect against threats."
+- Both operational (primary_category=other): Standard urgency. Second sentence in every update: "Email security detection and automated remediation remain fully operational and continue to protect against threats."
 - detection_status unknown: Do NOT write "detection remains operational." Use: "We are confirming the status of detection services and will provide an update shortly."
 Always populate the "what's not affected" field from detection_status and remediation_status values — never infer this independently.
 
 RULES:
 1. NEVER include anything from internal_details_to_exclude. No engineer names, hostnames, PR numbers, commit SHAs.
-2. Timestamps in PT (Pacific Time) formatted "2:30 PM PT". Convert from UTC.
+2. Timestamps in PT (Pacific Time) formatted "2:30 PM PT". Convert from UTC. DST: March–October = PDT = UTC-7; November–February = PST = UTC-8. Always label as "PT" (not PST or PDT).
 3. Resolved update: include start time, resolution time, total duration, and one-line impact summary.
-4. Keep each update under 100 words. Status pages are scanned, not read.
-5. Identified stage: reference cause abstractly ("a configuration change", "an infrastructure issue", "an upstream service disruption").
+4. Keep each update under 100 words. If you must trim, cut in this order: (1) the next-update timing detail, (2) extra impact description, (3) timestamp precision. NEVER cut field #2 (what's not affected).
+5. Identified stage: reference cause abstractly ("a configuration change", "an infrastructure issue", "an upstream service disruption"). If root_cause.status="confirmed", say "we have identified [abstract cause]." If "hypothesized", say "we believe we have identified what appears to be [abstract cause] and are working to confirm."
+
+EXAMPLE of a correctly-structured Investigating update (79 words):
+"We are investigating an issue affecting [service name] that began around 2:20 PM PT. Email security detection and automated remediation remain fully operational and continue to protect against threats. Some customers may experience [plain-language impact description]. Our engineering team is actively working to identify the cause and restore full service. We will provide an update within 30 minutes. No action is required at this time."
 
 Return ONLY valid JSON, no markdown fencing:
 
@@ -710,56 +716,89 @@ def _is_anomalous(val: float, baseline: float) -> bool:
 
 
 def summarize_metrics(content: str) -> str:
+    """Summarize Prometheus metrics for LLM input.
+
+    Returns a two-section string:
+    - METRIC SUMMARY: human-readable overview (anomalous vs normal per metric)
+    - RAW ANOMALOUS VALUES: verbatim timestamp-value pairs for anomalous series only,
+      enabling the evidence trace to cite exact metric readings.
+    """
     logger.info(f"=== summarize_metrics STARTED ===")
     logger.info(f"Content length: {len(content)} chars")
-    
+
     try:
         data = json.loads(content)
         logger.info("JSON parsed successfully")
     except Exception as e:
         logger.error(f"Failed to parse JSON: {e}")
         return "Metrics parsing failed"
-    
-    sections = []
+
+    summary_lines = []
+    raw_anomalous = {}
+
     try:
         for name, labels, values in _parse_prometheus(data):
             logger.info(f"Processing metric: {name} with {len(values)} values")
             if len(values) < 3:
                 logger.warning(f"Skipping {name}: insufficient values ({len(values)})")
                 continue
-            
+
             baseline = (values[0][1] + values[1][1]) / 2
-            logger.info(f"Baseline for {name}: {baseline}")
-            
-            anomalies = []
-            for ts, val in values[2:]:
-                if _is_anomalous(val, baseline):
-                    anomalies.append((ts, val))
-                    logger.debug(f"Found anomaly in {name} at {ts}: {val}")
-            
+            logger.info(f"Baseline for {name}: {baseline:.4f}")
+
+            anomalies = [(ts, val) for ts, val in values[2:] if _is_anomalous(val, baseline)]
+
             if anomalies:
-                logger.info(f"Found {len(anomalies)} anomalies in {name}")
-                sections.append(f"{name}: {len(anomalies)} anomalies detected")
+                first_ts, first_val = anomalies[0]
+                peak_ts, peak_val = max(anomalies, key=lambda x: abs(x[1] - baseline))
+                logger.info(f"Found {len(anomalies)} anomalies in {name}; first={first_val:.4f}@{first_ts}, peak={peak_val:.4f}@{peak_ts}")
+                summary_lines.append(
+                    f"{name}: {len(anomalies)} anomalies — "
+                    f"baseline={baseline:.4f}, first anomaly={first_val:.4f} at {first_ts}, "
+                    f"peak={peak_val:.4f} at {peak_ts}"
+                )
+                raw_anomalous[name] = [
+                    {"timestamp": ts, "value": round(val, 6)} for ts, val in anomalies
+                ]
             else:
                 logger.info(f"No anomalies found in {name}")
-                sections.append(f"{name}: normal")
-        
-        result = "; ".join(sections) if sections else "No metrics data"
-        logger.info(f"=== summarize_metrics COMPLETED: {result} ===")
+                summary_lines.append(f"{name}: normal (baseline={baseline:.4f})")
+
+        if not summary_lines:
+            return "No metrics data"
+
+        result = "METRIC SUMMARY:\n" + "\n".join(summary_lines)
+        if raw_anomalous:
+            result += "\n\nRAW ANOMALOUS VALUES (cite these verbatim in evidence_trace):\n"
+            result += json.dumps(raw_anomalous, indent=2)
+
+        logger.info(f"=== summarize_metrics COMPLETED: {len(summary_lines)} metrics, {len(raw_anomalous)} anomalous ===")
         return result
-        
+
     except Exception as e:
         logger.error(f"Error summarizing metrics: {e}")
         logger.info("=== summarize_metrics FAILED ===")
         return "Metrics summarization failed"
 
 
-def build_user_message(files_by_type: dict, deployment_flags: list = None) -> str:
+def build_user_message(file_contents: dict, deployment_flags: list = None) -> str:
+    """Build the extraction user message from raw file contents.
+
+    Detects each file's type, routes it to the correct section, and annotates
+    each section header with the original filename so the LLM can produce
+    accurate source_file citations in evidence_trace.
+    """
     logger.info(f"=== build_user_message STARTED ===")
-    logger.info(f"Input files: {list(files_by_type.keys())}")
+    logger.info(f"Input files: {list(file_contents.keys())}")
     logger.info(f"Deployment flags: {len(deployment_flags) if deployment_flags else 0} items")
-    
-    sections = []
+
+    # Detect types and build type→(filename, content) map (last file wins per type)
+    typed: dict[str, tuple[str, str]] = {}
+    for filename, content in file_contents.items():
+        ftype = detect_file_type(filename, content)
+        typed[ftype] = (filename, content)
+        logger.info(f"Routed {filename} → {ftype}")
+
     order = [
         ("pagerduty_incident",  "PAGERDUTY INCIDENT"),
         ("cloudwatch_logs",     "CLOUDWATCH LOGS"),
@@ -767,17 +806,19 @@ def build_user_message(files_by_type: dict, deployment_flags: list = None) -> st
         ("github_deployments",  "GITHUB DEPLOYMENTS"),
         ("incident_context",    "INCIDENT CONTEXT (SLACK THREAD)"),
     ]
-    
+
+    sections = []
     for ftype, label in order:
-        if ftype not in files_by_type:
+        if ftype not in typed:
             logger.debug(f"Skipping {label} - not found in files")
             continue
-        logger.info(f"Adding section: {label}")
-        content = files_by_type[ftype]
+        filename, content = typed[ftype]
+        logger.info(f"Adding section: {label} (source: {filename})")
         if ftype == "prometheus_metrics":
             content = summarize_metrics(content)
-        sections.append(f"=== {label} ===\n{content}")
-    
+        # Include filename so LLM can cite it verbatim in evidence_trace.source_file
+        sections.append(f"=== {label} (filename: {filename}) ===\n{content}")
+
     if deployment_flags:
         logger.info("Adding deployment correlation section")
         sections.append(
@@ -787,7 +828,7 @@ def build_user_message(files_by_type: dict, deployment_flags: list = None) -> st
         )
     else:
         logger.debug("No deployment flags to add")
-    
+
     result = "\n\n".join(sections)
     logger.info(f"Built user message with {len(sections)} sections, total length: {len(result)} chars")
     logger.info("=== build_user_message COMPLETED ===")
@@ -830,11 +871,15 @@ def correlate_deployments(file_contents: dict) -> list:
             except Exception as e:
                 logger.error(f"Error processing PagerDuty content: {e}")
 
-        # Check Prometheus for an earlier signal
+        # Check Prometheus for an earlier signal using multi-metric consensus.
+        # A single anomalous reading can be a transient spike; require at least
+        # 2 metrics anomalous in the same 5-minute window before trusting the signal.
         if pm_content:
-            logger.info("Checking Prometheus for earlier onset signal")
+            logger.info("Checking Prometheus for earlier onset signal (multi-metric consensus)")
             try:
                 pm_data = json.loads(pm_content)
+                # Collect first-anomaly timestamp per metric
+                metric_first_anomalies: list[datetime] = []
                 for name, labels, values in _parse_prometheus(pm_data):
                     if len(values) < 3:
                         continue
@@ -843,12 +888,22 @@ def correlate_deployments(file_contents: dict) -> list:
                         if _is_anomalous(val, baseline):
                             try:
                                 ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                                if onset_dt is None or ts_dt < onset_dt:
-                                    onset_dt = ts_dt
-                                    logger.info(f"Earlier onset found in Prometheus: {onset_dt}")
+                                metric_first_anomalies.append(ts_dt)
+                                logger.debug(f"First anomaly in {name}: {ts_dt}")
                             except Exception:
                                 pass
-                            break
+                            break  # only first anomaly per metric
+
+                # Find earliest window where ≥2 metrics are simultaneously anomalous
+                metric_first_anomalies.sort()
+                for i, t in enumerate(metric_first_anomalies):
+                    window_end = t + timedelta(minutes=5)
+                    count_in_window = sum(1 for t2 in metric_first_anomalies if t <= t2 <= window_end)
+                    if count_in_window >= 2:
+                        if onset_dt is None or t < onset_dt:
+                            onset_dt = t
+                            logger.info(f"Prometheus multi-metric onset ({count_in_window} metrics): {onset_dt}")
+                        break
             except Exception as e:
                 logger.error(f"Error processing Prometheus content: {e}")
 
@@ -858,9 +913,11 @@ def correlate_deployments(file_contents: dict) -> list:
 
         logger.info(f"Final onset time: {onset_dt}")
         gh = json.loads(gh_content)
-        window_start = onset_dt - timedelta(minutes=60)
-        logger.info(f"Deployment correlation window: {window_start} to {onset_dt}")
-        
+        pre_window_start  = onset_dt - timedelta(minutes=60)
+        post_window_end   = onset_dt + timedelta(minutes=30)
+        logger.info(f"Pre-onset window: {pre_window_start} → {onset_dt}")
+        logger.info(f"Post-onset window: {onset_dt} → {post_window_end}")
+
         flagged = []
 
         for deploy in gh.get("deployments", []):
@@ -871,27 +928,41 @@ def correlate_deployments(file_contents: dict) -> list:
                 d_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
             except Exception:
                 continue
-            if not (window_start <= d_dt <= onset_dt):
+
+            in_pre  = pre_window_start <= d_dt <= onset_dt
+            in_post = onset_dt < d_dt <= post_window_end
+            if not (in_pre or in_post):
                 continue
 
-            mins_before = int((onset_dt - d_dt).total_seconds() / 60)
-            svc = deploy.get("service", "").lower()
+            svc      = deploy.get("service", "").lower()
             same_svc = bool(alert_service and svc and (alert_service in svc or svc in alert_service))
-            
-            flagged.append({
-                "service":              deploy.get("service", "unknown"),
-                "title":                deploy.get("title", deploy.get("description", "Deployment")),
-                "author":               deploy.get("author", "unknown"),
-                "timestamp":            ts_str,
-                "minutes_before_onset": mins_before,
-                "same_service_as_alert": same_svc,
-                "relevance":            "HIGH" if same_svc else "LOW",
-                "pr_number":            deploy.get("pr_number"),
-                "description":          deploy.get("description", ""),
-            })
-            logger.info(f"Flagged deployment: {deploy.get('service')} - {mins_before}min before onset - {'HIGH' if same_svc else 'LOW'} relevance")
 
-        flagged.sort(key=lambda d: (0 if d["relevance"] == "HIGH" else 1, d["minutes_before_onset"]))
+            if in_pre:
+                mins_before = int((onset_dt - d_dt).total_seconds() / 60)
+                relevance = "HIGH" if same_svc else "LOW"
+                timing_label = f"{mins_before}min before onset"
+            else:
+                mins_after = int((d_dt - onset_dt).total_seconds() / 60)
+                relevance = "POST-ONSET"
+                timing_label = f"{mins_after}min after onset"
+                mins_before = -mins_after  # negative = after onset
+
+            flagged.append({
+                "service":               deploy.get("service", "unknown"),
+                "title":                 deploy.get("title", deploy.get("description", "Deployment")),
+                "author":                deploy.get("author", "unknown"),
+                "timestamp":             ts_str,
+                "minutes_before_onset":  mins_before,
+                "timing_label":          timing_label,
+                "same_service_as_alert": same_svc,
+                "relevance":             relevance,
+                "description":           deploy.get("description", ""),
+            })
+            logger.info(f"Flagged deployment: {deploy.get('service')} - {timing_label} - {relevance}")
+
+        # Sort: HIGH first, then LOW by timing, POST-ONSET last
+        order_map = {"HIGH": 0, "LOW": 1, "POST-ONSET": 2}
+        flagged.sort(key=lambda d: (order_map.get(d["relevance"], 9), abs(d["minutes_before_onset"])))
         logger.info(f"Deployment correlation completed: {len(flagged)} deployments flagged")
         return flagged
     except Exception as e:
@@ -904,15 +975,8 @@ def run_extraction(file_contents: dict, deployment_flags: list) -> dict:
     logger.info("=== Extraction Pipeline Started ===")
     logger.info(f"INPUT ANALYSIS: {len(file_contents)} files, {len(deployment_flags)} deployment flags")
     logger.info(f"File names: {list(file_contents.keys())}")
-    
-    # Detect file types
-    file_types = {}
-    for filename, content in file_contents.items():
-        file_type = detect_file_type(filename, content)
-        file_types[filename] = file_type
-        logger.info(f"File type detected: {filename} -> {file_type}")
-    
-    # Build user message
+
+    # Build user message (type detection happens inside build_user_message)
     logger.info("Building user message...")
     user_message = build_user_message(file_contents, deployment_flags)
     logger.info(f"Built user message, length: {len(user_message)} chars")
@@ -963,6 +1027,13 @@ def run_generation(extraction: dict) -> dict:
     
     result = call_claude(extraction_json, GENERATION_SYSTEM_PROMPT, max_tokens=TOKEN_LIMITS["generation"])
     logger.info(f"Generation completed successfully with keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+
+    # Enforce stage ordering regardless of what the LLM returned
+    STAGE_ORDER = {"investigating": 0, "identified": 1, "monitoring": 2, "resolved": 3}
+    if isinstance(result, dict) and "communications" in result:
+        result["communications"].sort(key=lambda c: STAGE_ORDER.get(c.get("stage", ""), 99))
+        logger.info(f"Communications sorted: {[c.get('stage') for c in result['communications']]}")
+
     return result
 
 
@@ -980,6 +1051,7 @@ def save_inference_log(extraction: dict) -> None:
             "pattern_classification": extraction.get("pattern_classification", {}),
             "security_function_impact": extraction.get("security_function_impact", {}),
             "inference_log":          extraction.get("inference_log", []),
+            "evidence_trace":         extraction.get("evidence_trace", []),
             "confidence_scores":      extraction.get("confidence_scores", {}),
             "data_gaps":              extraction.get("data_gaps", []),
         }
@@ -1066,11 +1138,19 @@ def validate_communications(comms: dict, extraction: dict = None) -> list:
                               "severity": "medium",
                               "detail": "Should tell customers when to expect the next update."})
             logger.warning(f"Missing 'next update' field in {stage}")
-        if stage not in ("investigating",) and not any(kw in msg for kw in ACTION_KW):
+        if not any(kw in msg for kw in ACTION_KW):
             warnings.append({"stage": stage, "field": "Customer action",
                               "severity": "medium",
-                              "detail": "Should state what customers should do (usually 'No action required')."})
+                              "detail": "Should state what customers should do (usually 'No action required at this time')."})
             logger.warning(f"Missing 'customer action' field in {stage}")
+
+        # Word count check — generation prompt targets under 100 words
+        word_count = len(comm.get("message", "").split())
+        if word_count > 110:
+            warnings.append({"stage": stage, "field": "Message length",
+                              "severity": "medium",
+                              "detail": f"Message is {word_count} words. Target is under 100. Status page updates should be scannable."})
+            logger.warning(f"Message too long in {stage}: {word_count} words")
 
         # SFI check 1: detection confirmed operational — must say so
         if det_status == "fully_operational" and not any(kw in msg for kw in DETECTION_CONFIRM_KW):
@@ -1088,6 +1168,64 @@ def validate_communications(comms: dict, extraction: dict = None) -> list:
 
     logger.info(f"Validation completed: {len(warnings)} warnings found")
     return warnings
+
+
+def validate_extraction_consistency(extraction: dict) -> list:
+    """Cross-check extraction fields for logical contradictions.
+
+    Returns a list of consistency flag dicts with keys: field, detail, severity.
+    These are shown as a separate warning block in the results, not mixed with
+    communication validation.
+    """
+    flags = []
+    pc  = extraction.get("pattern_classification", {})
+    sfi = extraction.get("security_function_impact", {})
+    rc  = extraction.get("root_cause", {})
+    cs  = extraction.get("confidence_scores", {})
+
+    pattern    = pc.get("primary_pattern", "")
+    det_status = sfi.get("detection_status", "")
+    rem_status = sfi.get("remediation_status", "")
+    rc_status  = rc.get("status", "")
+    rc_conf    = cs.get("root_cause", "")
+
+    # Portal auth failures do not impair email detection
+    if pattern == "portal_auth_failure" and det_status in ("degraded", "offline"):
+        flags.append({
+            "field": "Pattern vs. detection status",
+            "detail": f"Pattern is '{pattern}' but detection_status='{det_status}'. Portal/UI failures do not affect email detection. Review security function classification.",
+            "severity": "high",
+        })
+
+    # Confirmed root cause should carry at least medium confidence
+    if rc_status == "confirmed" and rc_conf == "low":
+        flags.append({
+            "field": "Root cause confidence",
+            "detail": "root_cause.status='confirmed' but confidence_scores.root_cause='low'. Confirmed causes should have medium or high confidence. Review root cause reasoning.",
+            "severity": "medium",
+        })
+
+    # Deployment-induced pattern without confirmed or hypothesized root cause is suspicious
+    if pattern == "deployment_induced" and rc_status == "unknown":
+        flags.append({
+            "field": "Pattern vs. root cause status",
+            "detail": "Pattern is 'deployment_induced' but root_cause.status='unknown'. A deployment-induced pattern requires at least a hypothesized deployment trigger. Review root cause.",
+            "severity": "medium",
+        })
+
+    # Third-party dependency pattern should mention an external service in root cause trigger
+    if pattern == "third_party_dependency":
+        trigger = rc.get("trigger", "") or ""
+        external_signals = ["microsoft", "aws", "azure", "google", "external", "upstream", "third-party", "api"]
+        if not any(s in trigger.lower() for s in external_signals):
+            flags.append({
+                "field": "Pattern vs. root cause trigger",
+                "detail": "Pattern is 'third_party_dependency' but root_cause.trigger does not mention an external service. Verify the dependency name is documented.",
+                "severity": "medium",
+            })
+
+    logger.info(f"Extraction consistency check: {len(flags)} flags")
+    return flags
 
 
 # ── Evidence Trace constants ──────────────────────────────────────────────────
@@ -1197,7 +1335,11 @@ def render_evidence_trace(extraction: dict, comms: dict, file_contents: dict) ->
         v_status   = st.session_state.verify_status.get(q, "unverified")
         s_icon     = {"verified": "✅", "disputed": "❌", "unverified": "⬜"}.get(v_status, "⬜")
 
-        with st.expander(f"{s_icon} **{label}** {conf_emoji}", expanded=False):
+        # Show conclusion preview in header so IC can scan without expanding
+        conclusion_preview = conclusion[:80] + ("…" if len(conclusion) > 80 else "")
+        auto_expand = (v_status == "disputed")
+
+        with st.expander(f"{s_icon} **{label}** {conf_emoji} — _{conclusion_preview}_", expanded=auto_expand):
             st.markdown(f"**Conclusion:** {conclusion}")
 
             # Toggle buttons
@@ -1343,20 +1485,57 @@ def render_status_page(comms: dict, extraction: dict) -> None:
         incident_date = _extract_date_label(extraction)
         logger.info(f"Incident date: {incident_date}")
 
+        # Compute resolved duration if available
+        duration_html = ""
+        if is_resolved:
+            tl = extraction.get("timeline", {})
+            try:
+                onset_str    = tl.get("onset_time_utc") or tl.get("cause_time_utc")
+                resolved_str = tl.get("resolved_time_utc") or tl.get("mitigation_time_utc")
+                if onset_str and resolved_str:
+                    onset_dt   = datetime.fromisoformat(onset_str.replace("Z", "+00:00"))
+                    res_dt     = datetime.fromisoformat(resolved_str.replace("Z", "+00:00"))
+                    delta_mins = int((res_dt - onset_dt).total_seconds() / 60)
+                    if delta_mins > 0:
+                        h, m = divmod(delta_mins, 60)
+                        dur_str = (f"{h}h {m}m" if h else f"{m}m")
+                        duration_html = (
+                            f'<span style="font-size:12px;font-weight:400;color:#64748b;'
+                            f'margin-left:auto;">Resolved after {dur_str}</span>'
+                        )
+            except Exception:
+                pass
+
+        # Word-count badge per update
+        def _wc_badge(text: str) -> str:
+            wc = len(text.split())
+            if wc <= 100:
+                color, bg = "#065f46", "#f0fdf4"
+            elif wc <= 110:
+                color, bg = "#713f12", "#fefce8"
+            else:
+                color, bg = "#7f1d1d", "#fef2f2"
+            return (
+                f'<span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:3px;'
+                f'background:{bg};color:{color};margin-left:6px;">{wc}w</span>'
+            )
+
         # Build updates HTML — newest first, with stage label classes and <br> for newlines
         updates_html = ""
         reversed_comms = list(reversed(communications))
         for i, comm in enumerate(reversed_comms):
-            stage = comm.get("stage", "unknown")
-            posted = comm.get("posted_at_pt", "")
-            message = comm.get("message", "").replace("\n", "<br>")
-            is_last = (i == len(reversed_comms) - 1)
+            stage   = comm.get("stage", "unknown")
+            posted  = comm.get("posted_at_pt", "")
+            message = comm.get("message", "")
+            msg_html = message.replace("\n", "<br>")
+            is_last  = (i == len(reversed_comms) - 1)
             extra_cls = " status-update-last" if is_last else ""
+            wc_badge  = _wc_badge(message)
             logger.info(f"Rendering communication: {stage} at {posted}")
             updates_html += f"""
         <div class="status-update{extra_cls}">
-          <div class="stage-label stage-{stage}">{stage.title()}</div>
-          <div class="update-message">{message}</div>
+          <div class="stage-label stage-{stage}">{stage.title()}{wc_badge}</div>
+          <div class="update-message">{msg_html}</div>
           <div class="update-timestamp">{posted}</div>
         </div>"""
 
@@ -1371,6 +1550,7 @@ def render_status_page(comms: dict, extraction: dict) -> None:
         <div class="incident-title">
           <span class="dot {dot_class}"></span>
           {comms.get("title", "Incident")}
+          {duration_html}
         </div>
         {updates_html}
       </div>
@@ -1487,22 +1667,52 @@ def render_pattern_analysis(extraction: dict) -> None:
 
             if il:
                 st.markdown("---")
-                st.markdown("**Inference Chain**")
-                type_icon = {
-                    "direct_observation": "📌",
-                    "cross_reference": "🔗",
-                    "absence_of_evidence": "❓",
+                # Confidence summary line
+                conf_counts = {"high": 0, "medium": 0, "low": 0}
+                for entry in il:
+                    c = entry.get("confidence", "")
+                    if c in conf_counts:
+                        conf_counts[c] += 1
+                st.markdown(
+                    f"**Inference Chain** &nbsp; "
+                    f"🟢 {conf_counts['high']} high &nbsp; "
+                    f"🟡 {conf_counts['medium']} medium &nbsp; "
+                    f"🔴 {conf_counts['low']} low"
+                )
+                type_icon  = {
+                    "direct_observation":   "📌",
+                    "cross_reference":      "🔗",
+                    "absence_of_evidence":  "❓",
                     "engineer_confirmation": "✅",
                 }
-                for i, entry in enumerate(il):
-                    icon = type_icon.get(entry.get("inference_type", ""), "•")
-                    conf = entry.get("confidence", "")
-                    conf_emoji = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(conf, "⚪")
-                    sources = ", ".join(entry.get("sources", []))
-                    st.markdown(f"{icon} **{entry.get('claim', '')}** &nbsp; {conf_emoji}")
-                    if sources:
-                        st.caption(f"Sources: {sources}")
-                    logger.info(f"Inference {i+1}: {entry.get('inference_type')} - {entry.get('claim', '')[:50]}...")
+                type_label = {
+                    "direct_observation":   "Direct Observations",
+                    "cross_reference":      "Cross-References",
+                    "absence_of_evidence":  "Absence of Evidence",
+                    "engineer_confirmation": "Engineer Confirmations",
+                }
+                # Group by inference_type
+                from collections import defaultdict
+                grouped: dict = defaultdict(list)
+                for entry in il:
+                    grouped[entry.get("inference_type", "other")].append(entry)
+
+                type_order = ["engineer_confirmation", "direct_observation", "cross_reference", "absence_of_evidence", "other"]
+                for itype in type_order:
+                    entries = grouped.get(itype, [])
+                    if not entries:
+                        continue
+                    icon  = type_icon.get(itype, "•")
+                    label_text = type_label.get(itype, itype.replace("_", " ").title())
+                    with st.expander(f"{icon} {label_text} ({len(entries)})", expanded=(itype == "engineer_confirmation")):
+                        for i, entry in enumerate(entries):
+                            conf  = entry.get("confidence", "")
+                            conf_emoji = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(conf, "⚪")
+                            sources = ", ".join(entry.get("sources", []))
+                            st.markdown(f"{conf_emoji} **{entry.get('claim', '')}**")
+                            if sources:
+                                st.caption(f"Sources: {sources}")
+                            logger.info(f"Inference: {itype} - {entry.get('claim', '')[:50]}...")
 
             # Recent incident history
             past_logs = load_inference_logs(limit=6)
@@ -1576,24 +1786,33 @@ def render_deployment_alerts(flags: list) -> None:
         low_flags  = [f for f in flags if f["relevance"] == "LOW"]
         logger.info(f"High relevance flags: {len(high_flags)}, Low relevance flags: {len(low_flags)}")
 
+        post_flags = [f for f in flags if f["relevance"] == "POST-ONSET"]
+
         for f in high_flags:
             logger.info(f"Rendering HIGH alert: {f['service']} - {f['title']}")
-            pr = f"PR #{f['pr_number']}" if f.get("pr_number") else ""
-            st.warning(
-                f"⚠️ **Deployment detected {f['minutes_before_onset']}min before incident onset**\n\n"
-                f"- **Service:** {f['service']}\n"
-                f"- **Title:** {f['title']} {pr}\n"
-                f"- **Author:** {f['author']}\n"
-                f"- **Time:** {f['timestamp']}\n"
-                f"_Same service as alert - potential cause_"
-            )
+            timing = f.get("timing_label", f"{f['minutes_before_onset']}min before onset")
+            st.markdown(f"""
+<div class="deploy-high">
+  <strong>Deployment {timing} — same service as alert</strong><br>
+  <code>{f['service']}</code> &nbsp;·&nbsp; {f['title']} &nbsp;·&nbsp;
+  by {f['author']} &nbsp;·&nbsp; {f['timestamp']}
+</div>""", unsafe_allow_html=True)
 
         if low_flags:
             logger.info(f"Showing {len(low_flags)} low relevance flags in expander")
-            with st.expander(f"{len(low_flags)} other deployment(s) in time window (different service)", expanded=False):
+            with st.expander(f"{len(low_flags)} deployment(s) in 60-min pre-onset window (different service)", expanded=False):
                 for f in low_flags:
+                    timing = f.get("timing_label", f"{f['minutes_before_onset']}min before onset")
                     logger.info(f"Low flag: {f['service']} - {f['title']}")
-                    st.markdown(f"- **{f['service']}** — {f['title']} ({f['minutes_before_onset']}min before onset)")
+                    st.markdown(f"- **{f['service']}** — {f['title']} ({timing})")
+
+        if post_flags:
+            logger.info(f"Showing {len(post_flags)} post-onset deployment flags")
+            with st.expander(f"{len(post_flags)} deployment(s) after incident onset (potential worsening factors)", expanded=False):
+                for f in post_flags:
+                    timing = f.get("timing_label", "after onset")
+                    svc_note = " — same service" if f.get("same_service_as_alert") else ""
+                    st.markdown(f"- **{f['service']}** — {f['title']} ({timing}{svc_note})")
         
         logger.info("=== render_deployment_alerts COMPLETED ===")
         
@@ -1636,6 +1855,7 @@ def main():
         ("step", "upload"), ("extraction", None), ("comms", None),
         ("error", None), ("uploaded_files", None), ("sample_data", None),
         ("deployment_flags", None), ("validation_warnings", None),
+        ("consistency_flags", None),
         ("verify_status", None), ("verify_notes", None), ("publish_checks", None),
     ]:
         if key not in st.session_state:
@@ -1810,31 +2030,32 @@ def main():
             st.session_state.deployment_flags = deployment_flags
             logger.info(f"Deployment correlation completed: {len(deployment_flags)} flags")
 
-            status.text("🔍 Extracting incident facts...")
-            bar.progress(30)
+            status.text("🧠 Extracting incident facts (Claude)...")
+            bar.progress(20)
             logger.info("STEP 2: Running extraction...")
             extraction = run_extraction(file_contents, deployment_flags)
             st.session_state.extraction = extraction
             logger.info(f"Extraction completed: {type(extraction)} with keys {list(extraction.keys()) if isinstance(extraction, dict) else 'Not a dict'}")
-            
+            bar.progress(60)
+
             logger.info("STEP 3: Saving inference log...")
             save_inference_log(extraction)
-            bar.progress(60)
+            bar.progress(65)
             logger.info("Inference log saved")
 
-            status.text("📝 Generating communications...")
-            bar.progress(75)
+            status.text("✍️ Generating communications (Claude)...")
             logger.info("STEP 4: Running generation...")
             comms = run_generation(extraction)
             st.session_state.comms = comms
             logger.info(f"Generation completed: {type(comms)} with keys {list(comms.keys()) if isinstance(comms, dict) else 'Not a dict'}")
-            bar.progress(90)
+            bar.progress(95)
 
-            status.text("✔ Validating communications...")
+            status.text("✔ Validating...")
             logger.info("STEP 5: Running validation...")
             st.session_state.validation_warnings = validate_communications(comms, extraction)
+            st.session_state.consistency_flags   = validate_extraction_consistency(extraction)
             bar.progress(100)
-            logger.info(f"Validation completed: {len(st.session_state.validation_warnings)} warnings")
+            logger.info(f"Validation: {len(st.session_state.validation_warnings)} warnings, {len(st.session_state.consistency_flags)} consistency flags")
 
             status.text("✅ Complete!")
             logger.info("=== PROCESSING COMPLETED SUCCESSFULLY ===")
@@ -1885,26 +2106,52 @@ def main():
             return
 
         logger.info("Rendering results page...")
-        st.markdown("### ✨ Generated Communications")
 
-        # Deployment alerts above status page
+        def _zone(label: str, sublabel: str = "") -> None:
+            sub_html = f'<span style="font-size:11px;font-weight:400;color:#94a3b8;margin-left:8px;">{sublabel}</span>' if sublabel else ""
+            st.markdown(
+                f'<div style="font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;'
+                f'color:#64748b;padding:0.6rem 0 0.3rem 0;border-bottom:1px solid #e2e8f0;'
+                f'margin:1.5rem 0 1rem 0;">{label}{sub_html}</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ── Zone 1: Context ──────────────────────────────────────────────────
+        _zone("Pre-Flight Context")
         render_deployment_alerts(st.session_state.get("deployment_flags") or [])
 
-        # Status page
+        # ── Zone 2: Status Page Output ───────────────────────────────────────
+        _zone("Status Page Preview", "what will be published")
         render_status_page(st.session_state.comms, st.session_state.extraction)
 
-        # Evidence trace & human-in-the-loop verification
+        # ── Zone 3: Quality Checks ───────────────────────────────────────────
+        _zone("Quality Checks", "before you publish")
+
+        # Extraction consistency flags (cross-checks between pattern and SFI)
+        consistency_flags = st.session_state.get("consistency_flags") or []
+        if consistency_flags:
+            for cf in consistency_flags:
+                sev = cf.get("severity", "medium")
+                detail = cf.get("detail", "")
+                field  = cf.get("field", "")
+                if sev == "high":
+                    st.error(f"**Consistency flag — {field}:** {detail}")
+                else:
+                    st.warning(f"**Consistency flag — {field}:** {detail}")
+
+        render_validation(st.session_state.get("validation_warnings") or [])
+
+        # ── Zone 4: IC Verification ──────────────────────────────────────────
+        _zone("Incident Commander Verification", "review evidence before publishing")
         _et_files = st.session_state.sample_data or st.session_state.uploaded_files or {}
         render_evidence_trace(st.session_state.extraction, st.session_state.comms, _et_files)
 
-        # Required-fields validation
-        st.markdown("#### Communication Validation")
-        render_validation(st.session_state.get("validation_warnings") or [])
-
-        # Pattern analysis + inference log
+        # ── Zone 5: Analyst View (collapsed by default) ──────────────────────
+        _zone("Analyst View", "optional — pattern & inference detail")
         render_pattern_analysis(st.session_state.extraction)
 
-        # Structured extraction details
+        # ── Zone 6: Raw Extraction (collapsed by default) ────────────────────
+        _zone("Raw Extraction Data", "optional — full structured output")
         render_structured_analysis(st.session_state.extraction)
 
         st.markdown("---")
@@ -1915,6 +2162,7 @@ def main():
                 for key in ("step", "extraction", "comms", "error",
                             "uploaded_files", "sample_data",
                             "deployment_flags", "validation_warnings",
+                            "consistency_flags",
                             "verify_status", "verify_notes", "publish_checks"):
                     st.session_state[key] = None if key != "step" else "upload"
                 st.rerun()
