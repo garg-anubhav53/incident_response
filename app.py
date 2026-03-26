@@ -433,45 +433,30 @@ Return ONLY valid JSON, no markdown fencing:
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
 def parse_llm_json(text: str) -> dict:
-    logger.info(f"=== parse_llm_json STARTED ===")
-    logger.info(f"Input text length: {len(text)} chars")
-    logger.info(f"Input text preview: {text[:100]}...")
-    
     original_text = text
     text = text.strip()
-    logger.info(f"After strip: {len(text)} chars")
-    
+
     if text.startswith("```"):
-        logger.info("Removing markdown fence start")
         text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-        logger.info(f"After removing start fence: {len(text)} chars")
-    
     if text.endswith("```"):
-        logger.info("Removing markdown fence end")
         text = text.rsplit("```", 1)[0]
-        logger.info(f"After removing end fence: {len(text)} chars")
-    
-    # NEW: Handle extra text after JSON
-    # Find the end of the JSON object/array
+
+    # Find the end of the outermost JSON object/array (handle trailing text)
     brace_count = 0
     bracket_count = 0
     in_string = False
     escape_next = False
     json_end = -1
-    
     for i, char in enumerate(text):
         if escape_next:
             escape_next = False
             continue
-            
         if char == '\\':
             escape_next = True
             continue
-            
         if char == '"' and not escape_next:
             in_string = not in_string
             continue
-            
         if not in_string:
             if char == '{':
                 brace_count += 1
@@ -481,27 +466,23 @@ def parse_llm_json(text: str) -> dict:
                 bracket_count += 1
             elif char == ']':
                 bracket_count -= 1
-            
-            # Check if we've closed all braces/brackets
             if brace_count == 0 and bracket_count == 0 and i > 0:
                 json_end = i + 1
                 break
-    
     if json_end > 0:
-        logger.info(f"Found JSON end at position {json_end}, truncating extra text")
         text = text[:json_end]
-        logger.info(f"After truncation: {len(text)} chars")
-    
+
     try:
         result = json.loads(text.strip())
-        logger.info(f"JSON parse successful, type: {type(result)}, keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
-        logger.info("=== parse_llm_json COMPLETED SUCCESSFULLY ===")
+        logger.info(f"parse_llm_json: OK — {len(original_text)} chars in, keys={list(result.keys()) if isinstance(result, dict) else type(result).__name__}")
         return result
     except json.JSONDecodeError as e:
-        logger.error(f"JSON parse failed: {e}")
-        logger.error(f"Text that failed to parse: {repr(text)}")
-        logger.error(f"Original text: {repr(original_text)}")
-        logger.info("=== parse_llm_json FAILED ===")
+        logger.error(f"parse_llm_json FAILED: {e}")
+        logger.error(f"--- RAW LLM RESPONSE ({len(original_text)} chars) ---")
+        # Log in 2000-char chunks so nothing is truncated
+        for i in range(0, len(original_text), 2000):
+            logger.error(original_text[i:i+2000])
+        logger.error("--- END RAW LLM RESPONSE ---")
         raise
 
 
@@ -514,153 +495,69 @@ def parse_llm_json(text: str) -> dict:
 TOKEN_LIMITS = {
     "extraction": 24000,   # Complex incident analysis with inference logs (4x increased)
     "generation": 16000,   # Multi-stage communications (4x increased)
-    "default": 16000       # Fallback for other calls (4x increased)
+    "default": 8000       # Fallback for other calls (4x increased)
 }
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
-def call_claude(user_message: str, system_prompt: str, max_tokens: int = None, temperature: float = 0.2) -> dict:
-    # Use provided max_tokens or default from config
+def call_claude(user_message: str, system_prompt: str, max_tokens: int = None, temperature: float = 0.2, model: str = "claude-sonnet-4-5") -> dict:
     if max_tokens is None:
         max_tokens = TOKEN_LIMITS["default"]
-    
-    logger.info("=== Claude API Call DETAILED ANALYSIS ===")
-    logger.info(f"PARAMETER ORDER VERIFICATION:")
-    logger.info(f"  user_message length: {len(user_message)} chars")
-    logger.info(f"  system_prompt length: {len(system_prompt)} chars")
-    logger.info(f"  max_tokens: {max_tokens}")
-    logger.info(f"  temperature: {temperature}")
-    
-    # Log content previews for verification
-    logger.info(f"USER MESSAGE PREVIEW (first 300 chars): {repr(user_message[:300])}")
-    logger.info(f"SYSTEM PROMPT PREVIEW (first 200 chars): {repr(system_prompt[:200])}")
-    
-    # Verify parameter types
-    logger.info(f"PARAMETER TYPES: user_message={type(user_message)}, system_prompt={type(system_prompt)}")
-    
-    for attempt in range(1, 3):  # 2 attempts
-        logger.info(f"=== ATTEMPT {attempt}/2 ===")
-        
-        try:
-            logger.info("CREATING API REQUEST...")
-            logger.info(f"  model: claude-sonnet-4-5")
-            logger.info(f"  max_tokens: {max_tokens}")
-            logger.info(f"  temperature: {temperature}")
-            logger.info(f"  messages[0].role: user")
-            logger.info(f"  messages[0].content length: {len(user_message)}")
-            logger.info(f"  system parameter length: {len(system_prompt)}")
-            
-            logger.info("CALLING ANTHROPIC API...")
-            response = client.messages.create(
-                model="claude-sonnet-4-5",
-                max_tokens=max_tokens,
-                temperature=temperature,
-                messages=[{"role": "user", "content": user_message}],
-                system=system_prompt,
-                stream=True  # Enable streaming for large token limits
-            )
-            
-            logger.info("API RESPONSE RECEIVED - STREAMING")
-            logger.info(f"  response.type: {type(response)}")
-            
-            # Collect streamed content
-            content = ""
-            chunk_count = 0
-            for chunk in response:
-                chunk_count += 1
-                if chunk.type == "content_block_delta":
-                    if hasattr(chunk.delta, 'text'):
-                        content += chunk.delta.text
-                        if chunk_count % 10 == 0:  # Log every 10 chunks
-                            logger.info(f"  Received chunk {chunk_count}, content length: {len(content)}")
-            
-            logger.info(f"STREAMING COMPLETED: {chunk_count} chunks, {len(content)} total chars")
-            logger.info(f"  content type: {type(content)}")
-            logger.info(f"  content preview: {repr(content[:300])}")
-            
-            # Parse JSON response with detailed logging
-            logger.info("ATTEMPTING JSON PARSE...")
-            try:
-                logger.info(f"  Input to parse_llm_json: {len(content)} chars")
-                parsed = parse_llm_json(content)
-                logger.info(f"  JSON PARSE SUCCESS")
-                logger.info(f"  parsed type: {type(parsed)}")
-                if isinstance(parsed, dict):
-                    logger.info(f"  parsed keys: {list(parsed.keys())}")
-                    logger.info(f"  parsed keys count: {len(parsed.keys())}")
-                else:
-                    logger.warning(f"  parsed is not dict: {parsed}")
-                logger.info("=== Claude API Call COMPLETED SUCCESSFULLY ===")
-                return parsed
-            except Exception as parse_error:
-                logger.error(f"  JSON PARSE FAILED")
-                logger.error(f"  parse_error type: {type(parse_error)}")
-                logger.error(f"  parse_error message: {parse_error}")
-                logger.error(f"  content that failed: {repr(content[:500])}")
-                if attempt == 2:
-                    logger.error("  JSON parsing failed on final attempt - raising")
-                    raise
-                else:
-                    logger.info("  Will retry JSON parsing...")
-                    continue
-                
-        except Exception as e:
-            error_type = type(e).__name__
-            error_msg = str(e)
-            logger.error(f"API CALL FAILED")
-            logger.error(f"  error_type: {error_type}")
-            logger.error(f"  error_msg: {error_msg}")
-            
-            # Log detailed error information
-            if hasattr(e, 'response') and e.response is not None:
-                logger.error(f"  HTTP response status: {e.response.status_code}")
-                logger.error(f"  HTTP response body: {e.response.text}")
-            if hasattr(e, 'request') and e.request is not None:
-                logger.error(f"  HTTP request info available")
-            
-            if attempt == 2:
-                logger.error("=== Claude API Call FAILED ON FINAL ATTEMPT ===")
-                raise
-            else:
-                logger.info("  Will retry API call...")
-                continue
+
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    logger.info(f"call_claude: model={model} max_tokens={max_tokens} temp={temperature} "
+                f"user_msg={len(user_message)}chars system={len(system_prompt)}chars "
+                f"api_key={'SET ('+api_key[:8]+'...)' if api_key else 'MISSING'}")
+
+    import traceback as _tb
+    try:
+        response = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            messages=[{"role": "user", "content": user_message}],
+            system=system_prompt,
+            stream=True,
+        )
+
+        content = ""
+        stop_reason = None
+        for chunk in response:
+            if chunk.type == "content_block_delta":
+                content += chunk.delta.text
+            elif chunk.type == "message_delta":
+                stop_reason = getattr(chunk.delta, "stop_reason", None)
+
+        logger.info(f"call_claude: stream done — {len(content)} chars received, stop_reason={stop_reason}")
+        if stop_reason == "max_tokens":
+            logger.warning("call_claude: RESPONSE TRUNCATED (hit max_tokens) — JSON may be incomplete")
+
+        result = parse_llm_json(content)
+        logger.info(f"call_claude: SUCCESS — result keys={list(result.keys()) if isinstance(result, dict) else type(result).__name__}")
+        return result
+
+    except Exception as e:
+        logger.error(f"call_claude FAILED: {type(e).__name__}: {e}")
+        logger.error("call_claude TRACEBACK:\n" + _tb.format_exc())
+        raise
 
 
 # ── File detection & preprocessing ────────────────────────────────────────────
 def detect_file_type(filename: str, content: str) -> str:
-    logger.info(f"=== detect_file_type STARTED ===")
-    logger.info(f"Filename: {filename}")
-    logger.info(f"Content length: {len(content)} chars")
-    
     cl = content.lower()
     fn = filename.lower()
-    logger.info(f"Lowercase filename: {fn}")
-    logger.info(f"Content preview: {cl[:100]}...")
-    
-    file_type = "unknown"
-    
     if fn.startswith("pagerduty") or ('"incident"' in cl and '"severity"' in cl and '"urgency"' in cl):
-        file_type = "pagerduty_incident"
-        logger.info("Detected as pagerduty_incident")
+        return "pagerduty_incident"
     elif fn.startswith("cloudwatch") or fn.startswith("app_logs") or ("loggroup" in cl or "logstream" in cl):
-        file_type = "cloudwatch_logs"
-        logger.info("Detected as cloudwatch_logs")
+        return "cloudwatch_logs"
     elif fn.startswith("prometheus") or ("metric" in cl and ("timestamp" in cl or "value" in cl)):
-        file_type = "prometheus_metrics"
-        logger.info("Detected as prometheus_metrics")
+        return "prometheus_metrics"
     elif fn.startswith("github") or ("deployments" in cl and ("timestamp" in cl or "service" in cl)):
-        file_type = "github_deployments"
-        logger.info("Detected as github_deployments")
+        return "github_deployments"
     elif "slack" in fn or ("channel" in cl and "user" in cl and "ts" in cl):
-        file_type = "slack_thread"
-        logger.info("Detected as slack_thread")
+        return "slack_thread"
     elif "incident" in fn or ("summary" in cl and ("timeline" in cl or "impact" in cl)):
-        file_type = "incident_context"
-        logger.info("Detected as incident_context")
-    else:
-        logger.info("File type not matched, returning 'unknown'")
-    
-    logger.info(f"=== detect_file_type COMPLETED: {file_type} ===")
-    return file_type
+        return "incident_context"
+    return "unknown"
 
 
 def _parse_prometheus(data: dict) -> list:
@@ -972,67 +869,25 @@ def correlate_deployments(file_contents: dict) -> list:
 
 # ── Pipeline calls ─────────────────────────────────────────────────────────────
 def run_extraction(file_contents: dict, deployment_flags: list) -> dict:
-    logger.info("=== Extraction Pipeline Started ===")
-    logger.info(f"INPUT ANALYSIS: {len(file_contents)} files, {len(deployment_flags)} deployment flags")
-    logger.info(f"File names: {list(file_contents.keys())}")
-
-    # Build user message (type detection happens inside build_user_message)
-    logger.info("Building user message...")
+    logger.info(f"run_extraction: {len(file_contents)} files={list(file_contents.keys())} flags={len(deployment_flags)}")
     user_message = build_user_message(file_contents, deployment_flags)
-    logger.info(f"Built user message, length: {len(user_message)} chars")
-    logger.info(f"CALLING EXTRACTION: user_message (len={len(user_message)}), system_prompt (len={len(EXTRACTION_SYSTEM_PROMPT)})")
-    
-    # Call Claude with configured token limit
+    logger.info(f"run_extraction: user_message built ({len(user_message)} chars), calling Claude...")
     result = call_claude(user_message, EXTRACTION_SYSTEM_PROMPT, max_tokens=TOKEN_LIMITS["extraction"])
-    logger.info(f"Extraction completed successfully with keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+    logger.info(f"run_extraction: DONE keys={list(result.keys()) if isinstance(result, dict) else type(result).__name__}")
     return result
 
 
 def run_generation(extraction: dict) -> dict:
-    logger.info("=== Generation Pipeline Started ===")
-    logger.info(f"INPUT ANALYSIS: extraction keys = {list(extraction.keys()) if isinstance(extraction, dict) else 'Not a dict'}")
-    
-    # Log extraction data in detail
-    if isinstance(extraction, dict):
-        logger.info("EXTRACTION DATA DUMP:")
-        for key, value in extraction.items():
-            if isinstance(value, dict):
-                logger.info(f"  {key}: dict with keys {list(value.keys())}")
-                # Log critical fields
-                if key == "incident_summary":
-                    logger.info(f"    incident_summary: {value}")
-                elif key == "affected_service":
-                    logger.info(f"    affected_service: {value}")
-                elif key == "security_function_impact":
-                    sfi = value
-                    logger.info(f"    security_function_impact:")
-                    logger.info(f"      primary_category: {sfi.get('primary_category', 'missing')}")
-                    logger.info(f"      detection_status: {sfi.get('detection_status', 'missing')}")
-                    logger.info(f"      remediation_status: {sfi.get('remediation_status', 'missing')}")
-                elif key == "timeline":
-                    tl = value
-                    logger.info(f"    timeline:")
-                    for tk, tv in tl.items():
-                        logger.info(f"      {tk}: {tv}")
-            elif isinstance(value, list):
-                logger.info(f"  {key}: list with {len(value)} items")
-            else:
-                logger.info(f"  {key}: {type(value)} = {str(value)[:100]}")
-    else:
-        logger.error(f"EXTRACTION IS NOT A DICT: {type(extraction)}")
-    
+    logger.info(f"run_generation: extraction keys={list(extraction.keys()) if isinstance(extraction, dict) else type(extraction).__name__}")
     extraction_json = json.dumps(extraction, indent=2)
-    logger.info(f"Extraction JSON length: {len(extraction_json)} chars")
-    logger.info(f"CALLING GENERATION: extraction_json (len={len(extraction_json)}), system_prompt (len={len(GENERATION_SYSTEM_PROMPT)})")
-    
+    logger.info(f"run_generation: payload {len(extraction_json)} chars, calling Claude...")
     result = call_claude(extraction_json, GENERATION_SYSTEM_PROMPT, max_tokens=TOKEN_LIMITS["generation"])
-    logger.info(f"Generation completed successfully with keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+    logger.info(f"run_generation: DONE keys={list(result.keys()) if isinstance(result, dict) else type(result).__name__}")
 
-    # Enforce stage ordering regardless of what the LLM returned
     STAGE_ORDER = {"investigating": 0, "identified": 1, "monitoring": 2, "resolved": 3}
     if isinstance(result, dict) and "communications" in result:
         result["communications"].sort(key=lambda c: STAGE_ORDER.get(c.get("stage", ""), 99))
-        logger.info(f"Communications sorted: {[c.get('stage') for c in result['communications']]}")
+        logger.info(f"run_generation: stages sorted={[c.get('stage') for c in result['communications']]}")
 
     return result
 
@@ -1449,44 +1304,36 @@ def _extract_date_label(extraction: dict) -> str:
 
 # ── Status page renderer ──────────────────────────────────────────────────────
 def render_status_page(comms: dict, extraction: dict) -> None:
-    logger.info(f"=== render_status_page STARTED ===")
-    logger.info(f"Comms keys: {list(comms.keys()) if isinstance(comms, dict) else 'Not a dict'}")
-    logger.info(f"Extraction keys: {list(extraction.keys()) if isinstance(extraction, dict) else 'Not a dict'}")
-    
     try:
         severity = extraction.get("customer_impact", {}).get("severity_assessment", "degraded_performance")
-        logger.info(f"Severity assessment: {severity}")
-        
-        dot_class = {"degraded_performance": "dot-yellow", "partial_outage": "dot-orange",
-                       "full_outage": "dot-red"}.get(severity, "dot-yellow")
-        badge_class = {"degraded_performance": "badge-degraded", "partial_outage": "badge-outage",
-                       "full_outage": "badge-outage"}.get(severity, "badge-degraded")
-
         communications = comms.get("communications", [])
         is_resolved = bool(communications) and communications[-1].get("stage") == "resolved"
-        if is_resolved:
-            dot_class, badge_class = "dot-green", "badge-resolved"
-        badge_text = "Resolved" if is_resolved else severity.replace("_", " ").title()
-        logger.info(f"Dot class: {dot_class}, badge: {badge_class}")
 
-        # Security function impact badge
+        # ── Severity badge ──────────────────────────────────────────────────────
+        if is_resolved:
+            sev_color, sev_text = "green", "✅ Resolved"
+        elif severity == "full_outage":
+            sev_color, sev_text = "red", "🔴 Full Outage"
+        elif severity == "partial_outage":
+            sev_color, sev_text = "orange", "🟠 Partial Outage"
+        else:
+            sev_color, sev_text = "orange", "🟡 Degraded Performance"
+
+        # ── Security function impact badge ─────────────────────────────────────
         sfi = extraction.get("security_function_impact", {})
         det_status = sfi.get("detection_status", "unknown")
         rem_status = sfi.get("remediation_status", "unknown")
         if det_status in ("degraded", "offline"):
-            sfi_badge_cls, sfi_badge_txt = "sfi-badge-detection", "Detection Impact"
+            sfi_color, sfi_text = "red", "⚠️ Detection Impacted — threats may not be detected"
         elif rem_status in ("degraded", "offline"):
-            sfi_badge_cls, sfi_badge_txt = "sfi-badge-remediation", "Remediation Impact"
+            sfi_color, sfi_text = "orange", "⚠️ Remediation Impacted — threats detected but automated response delayed"
         elif det_status == "fully_operational" and rem_status == "fully_operational":
-            sfi_badge_cls, sfi_badge_txt = "sfi-badge-operational", "Security Functions Operational"
+            sfi_color, sfi_text = "green", "✅ Detection & Remediation Fully Operational"
         else:
-            sfi_badge_cls, sfi_badge_txt = "sfi-badge-unknown", "Security Status Unconfirmed"
+            sfi_color, sfi_text = "gray", "❓ Security Function Status Unconfirmed (not enough data to assess)"
 
-        incident_date = _extract_date_label(extraction)
-        logger.info(f"Incident date: {incident_date}")
-
-        # Compute resolved duration if available
-        duration_html = ""
+        # ── Duration ───────────────────────────────────────────────────────────
+        duration_str = ""
         if is_resolved:
             tl = extraction.get("timeline", {})
             try:
@@ -1498,69 +1345,62 @@ def render_status_page(comms: dict, extraction: dict) -> None:
                     delta_mins = int((res_dt - onset_dt).total_seconds() / 60)
                     if delta_mins > 0:
                         h, m = divmod(delta_mins, 60)
-                        dur_str = (f"{h}h {m}m" if h else f"{m}m")
-                        duration_html = (
-                            f'<span style="font-size:12px;font-weight:400;color:#64748b;'
-                            f'margin-left:auto;">Resolved after {dur_str}</span>'
-                        )
+                        duration_str = f"Resolved after {h}h {m}m" if h else f"Resolved after {m}m"
             except Exception:
                 pass
 
-        # Word-count badge per update
-        def _wc_badge(text: str) -> str:
-            wc = len(text.split())
-            if wc <= 100:
-                color, bg = "#065f46", "#f0fdf4"
-            elif wc <= 110:
-                color, bg = "#713f12", "#fefce8"
-            else:
-                color, bg = "#7f1d1d", "#fef2f2"
-            return (
-                f'<span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:3px;'
-                f'background:{bg};color:{color};margin-left:6px;">{wc}w</span>'
-            )
+        incident_date = _extract_date_label(extraction)
 
-        # Build updates HTML — newest first, with stage label classes and <br> for newlines
-        updates_html = ""
-        reversed_comms = list(reversed(communications))
-        for i, comm in enumerate(reversed_comms):
+        # ── Header ─────────────────────────────────────────────────────────────
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f":{sev_color}[**{sev_text}**]" + (f"  ·  *{duration_str}*" if duration_str else ""))
+        with c2:
+            st.markdown(f":{sfi_color}[{sfi_text}]")
+
+        st.caption(
+            f"📅 {incident_date}   "
+            "**Left badge:** incident severity.   "
+            "**Right badge:** whether email detection or automated remediation are impacted "
+            "(most critical for a security product — red = customers may be exposed to threats)."
+        )
+
+        st.markdown(f"**{comms.get('title', 'Incident')}**")
+        st.caption(
+            "Word count shown after each stage label — "
+            ":green[green ≤ 100 words (target)], "
+            ":orange[amber ≤ 110 (acceptable)], "
+            ":red[red > 110 (trim needed)]."
+        )
+
+        # ── Stage messages ─────────────────────────────────────────────────────
+        stage_colors = {
+            "resolved":     "green",
+            "monitoring":   "blue",
+            "identified":   "orange",
+            "investigating":"red",
+        }
+
+        def _wc_label(text: str) -> str:
+            wc = len(text.split())
+            if wc <= 100:   return f":green[{wc}w]"
+            elif wc <= 110: return f":orange[{wc}w]"
+            else:           return f":red[{wc}w ⚠]"
+
+        for comm in reversed(communications):
             stage   = comm.get("stage", "unknown")
             posted  = comm.get("posted_at_pt", "")
             message = comm.get("message", "")
-            msg_html = message.replace("\n", "<br>")
-            is_last  = (i == len(reversed_comms) - 1)
-            extra_cls = " status-update-last" if is_last else ""
-            wc_badge  = _wc_badge(message)
-            logger.info(f"Rendering communication: {stage} at {posted}")
-            updates_html += f"""
-        <div class="status-update{extra_cls}">
-          <div class="stage-label stage-{stage}">{stage.title()}{wc_badge}</div>
-          <div class="update-message">{msg_html}</div>
-          <div class="update-timestamp">{posted}</div>
-        </div>"""
+            color   = stage_colors.get(stage, "gray")
+            with st.container(border=True):
+                st.markdown(
+                    f":{color}[**{stage.title()}**]  ·  "
+                    f"*{posted}*  ·  {_wc_label(message)}"
+                )
+                st.markdown(message)
 
-        st.markdown(f"""
-    <div class="status-container">
-      <div class="overall-status">
-        <span class="badge {badge_class}">{badge_text}</span>
-        <span class="sfi-badge {sfi_badge_cls}">{sfi_badge_txt}</span>
-      </div>
-      <div class="date-label">{incident_date}</div>
-      <div class="incident-card">
-        <div class="incident-title">
-          <span class="dot {dot_class}"></span>
-          {comms.get("title", "Incident")}
-          {duration_html}
-        </div>
-        {updates_html}
-      </div>
-    </div>""", unsafe_allow_html=True)
-        
-        logger.info("=== render_status_page COMPLETED ===")
-        
     except Exception as e:
         logger.error(f"Error in render_status_page: {e}")
-        logger.info("=== render_status_page FAILED ===")
         st.error(f"Error rendering status page: {e}")
 
 
@@ -1748,10 +1588,7 @@ def render_validation(warnings: list) -> None:
         logger.info(f"High severity warnings: {len(high)}, Medium severity warnings: {len(medium)}")
 
         if not warnings:
-            logger.info("No warnings - showing success message")
-            st.markdown('<div class="val-pass">✅ All communications pass required field validation.</div>',
-                        unsafe_allow_html=True)
-            logger.info("=== render_validation COMPLETED ===")
+            st.success("✅ All communications pass required field validation.")
             return
 
         for w in high:
@@ -1850,7 +1687,6 @@ def main():
     </div>""", unsafe_allow_html=True)
 
     # Session state init
-    logger.info("Initializing session state...")
     for key, default in [
         ("step", "upload"), ("extraction", None), ("comms", None),
         ("error", None), ("uploaded_files", None), ("sample_data", None),
@@ -1860,22 +1696,15 @@ def main():
     ]:
         if key not in st.session_state:
             st.session_state[key] = default
-            logger.info(f"Initialized session state {key} = {default}")
-        else:
-            logger.info(f"Session state {key} already exists = {st.session_state[key]}")
+    logger.info(f"RERUN step={st.session_state.step} "
+                f"uploaded={'yes('+str(len(st.session_state.uploaded_files))+')' if st.session_state.uploaded_files else 'no'} "
+                f"sample={'yes' if st.session_state.sample_data else 'no'} "
+                f"extraction={'yes' if st.session_state.extraction else 'no'} "
+                f"comms={'yes' if st.session_state.comms else 'no'} "
+                f"error={repr(st.session_state.error)}")
 
-    if st.session_state.step == "upload":
-        st.session_state.error = None
-
-    # Error banner
     if st.session_state.error:
-        logger.error(f"Showing error banner: {st.session_state.error}")
-        st.error(f"**Error:** {st.session_state.error}")
-        if st.button("🔄 Try Again"):
-            logger.info("User clicked 'Try Again' - clearing error and resetting to upload step")
-            st.session_state.error = None
-            st.session_state.step = "upload"
-            st.rerun()
+        logger.error(f"PIPELINE ERROR (shown on upload page): {st.session_state.error}")
 
     # Progress indicator
     steps = [
@@ -1944,168 +1773,87 @@ def main():
             _, col, _ = st.columns([1, 2, 1])
             with col:
                 if st.button("🚀 Analyze Incident", type="primary", use_container_width=True):
-                    logger.info("=== 'Analyze Incident' BUTTON CLICKED ===")
-                    logger.info(f"BEFORE CLICK - Session state:")
-                    logger.info(f"  step: {st.session_state.step}")
-                    logger.info(f"  uploaded_files exists: {st.session_state.uploaded_files is not None}")
-                    logger.info(f"  sample_data exists: {st.session_state.sample_data is not None}")
-                    logger.info(f"  extraction exists: {st.session_state.extraction is not None}")
-                    logger.info(f"  comms exists: {st.session_state.comms is not None}")
-                    logger.info(f"  error exists: {st.session_state.error is not None}")
-                    
-                    if st.session_state.uploaded_files:
-                        logger.info(f"  uploaded_files keys: {list(st.session_state.uploaded_files.keys())}")
-                        for k, v in st.session_state.uploaded_files.items():
-                            logger.info(f"    {k}: {len(v)} chars")
-                    
-                    logger.info("CHANGING STEP TO 'processing'")
+                    logger.info("BUTTON CLICKED: Analyze Incident — setting step=processing")
                     st.session_state.step = "processing"
-                    logger.info(f"AFTER STEP CHANGE - step: {st.session_state.step}")
-                    logger.info("TRIGGERING RERUN...")
                     st.rerun()
 
     # ── Step 2: Processing ──────────────────────────────────────────────────
     elif st.session_state.step == "processing":
-        logger.info("=== PROCESSING STEP ENTRY ===")
-        logger.info("FULL SESSION STATE DUMP:")
-        for key in ["step", "extraction", "comms", "error", "uploaded_files", "sample_data", "deployment_flags", "validation_warnings"]:
-            value = getattr(st.session_state, key, None)
-            if value is not None:
-                if isinstance(value, dict):
-                    logger.info(f"  {key}: dict with {len(value)} keys: {list(value.keys())}")
-                elif isinstance(value, list):
-                    logger.info(f"  {key}: list with {len(value)} items")
-                else:
-                    logger.info(f"  {key}: {type(value)} = {str(value)[:100]}")
-            else:
-                logger.info(f"  {key}: None")
-        
-        logger.info(f"SESSION STATE CHECK: extraction={st.session_state.extraction is not None}, comms={st.session_state.comms is not None}")
-        
-        # Guard: already done (rerun triggered before state advanced)
+        logger.info("=== PROCESSING STEP ENTERED ===")
+
+        # Guard: already finished (double-rerun edge case)
         if st.session_state.extraction is not None and st.session_state.comms is not None:
-            logger.info("GUARD TRIGGERED: Processing already completed, advancing to results")
-            logger.info(f"Before step change: step={st.session_state.step}")
+            logger.info("processing: guard — already done, advancing to results")
             st.session_state.step = "results"
-            logger.info(f"After step change: step={st.session_state.step}")
-            logger.info("TRIGGERING RERUN FROM GUARD...")
             st.rerun()
             return
 
-        logger.info("FILE CONTENTS VALIDATION...")
         file_contents = st.session_state.sample_data or st.session_state.uploaded_files
         if not file_contents:
-            logger.error("VALIDATION FAILED: No file contents found in session state")
-            logger.error(f"Session state details:")
-            logger.error(f"  sample_data is None: {st.session_state.sample_data is None}")
-            logger.error(f"  uploaded_files is None: {st.session_state.uploaded_files is None}")
-            st.error("❌ No files found. Please upload files or load sample data.")
-            logger.info("RESETING STEP TO 'upload' due to missing files")
+            logger.error("processing: ABORT — no file_contents in session state (sample_data=None, uploaded_files=None)")
             st.session_state.step = "upload"
             st.rerun()
             return
 
-        logger.info(f"FILE VALIDATION PASSED: {len(file_contents)} files found")
-        for filename, content in file_contents.items():
-            logger.info(f"  {filename}: {len(content)} chars, type={type(content)}")
-        
-        logger.info(f"DISPLAYING PROCESSING UI FOR FILES: {list(file_contents.keys())}")
+        logger.info(f"processing: files={list(file_contents.keys())}")
         st.markdown("### ⚡ Processing Incident Data")
-        for fn in file_contents:
-            st.markdown(f"- **{fn}**")
-        st.markdown("---")
-
-        logger.info("CREATING PROGRESS BAR AND STATUS...")
         bar = st.progress(0)
         status = st.empty()
-        logger.info("UI ELEMENTS CREATED, STARTING PROCESSING PIPELINE...")
 
+        import traceback as _tb
         try:
-            logger.info("=== PROCESSING PIPELINE STARTED ===")
-            
             status.text("🔎 Running deployment correlation...")
             bar.progress(10)
-            logger.info("STEP 1: Deployment correlation...")
             deployment_flags = correlate_deployments(file_contents)
             st.session_state.deployment_flags = deployment_flags
-            logger.info(f"Deployment correlation completed: {len(deployment_flags)} flags")
+            logger.info(f"processing: correlation done — {len(deployment_flags)} flags")
 
             status.text("🧠 Extracting incident facts (Claude)...")
             bar.progress(20)
-            logger.info("STEP 2: Running extraction...")
             extraction = run_extraction(file_contents, deployment_flags)
             st.session_state.extraction = extraction
-            logger.info(f"Extraction completed: {type(extraction)} with keys {list(extraction.keys()) if isinstance(extraction, dict) else 'Not a dict'}")
+            logger.info(f"processing: extraction done — keys={list(extraction.keys()) if isinstance(extraction, dict) else type(extraction).__name__}")
             bar.progress(60)
 
-            logger.info("STEP 3: Saving inference log...")
             save_inference_log(extraction)
             bar.progress(65)
-            logger.info("Inference log saved")
 
             status.text("✍️ Generating communications (Claude)...")
-            logger.info("STEP 4: Running generation...")
             comms = run_generation(extraction)
             st.session_state.comms = comms
-            logger.info(f"Generation completed: {type(comms)} with keys {list(comms.keys()) if isinstance(comms, dict) else 'Not a dict'}")
+            logger.info(f"processing: generation done — keys={list(comms.keys()) if isinstance(comms, dict) else type(comms).__name__}")
             bar.progress(95)
 
             status.text("✔ Validating...")
-            logger.info("STEP 5: Running validation...")
             st.session_state.validation_warnings = validate_communications(comms, extraction)
             st.session_state.consistency_flags   = validate_extraction_consistency(extraction)
             bar.progress(100)
-            logger.info(f"Validation: {len(st.session_state.validation_warnings)} warnings, {len(st.session_state.consistency_flags)} consistency flags")
+            logger.info(f"processing: validation done — {len(st.session_state.validation_warnings)} warnings, "
+                        f"{len(st.session_state.consistency_flags)} consistency flags")
 
             status.text("✅ Complete!")
-            logger.info("=== PROCESSING COMPLETED SUCCESSFULLY ===")
-            logger.info(f"FINAL STATE: step=results, extraction={st.session_state.extraction is not None}, comms={st.session_state.comms is not None}")
             st.session_state.step = "results"
-            st.rerun()
+            logger.info("processing: SUCCESS — step set to results")
 
         except Exception as e:
-            logger.error("=== PROCESSING EXCEPTION CAUGHT ===")
-            logger.error(f"EXCEPTION DETAILS:")
-            logger.error(f"  exception type: {type(e).__name__}")
-            logger.error(f"  exception message: {str(e)}")
-            logger.error(f"  exception args: {e.args}")
-            
-            # Log full traceback
-            import traceback
-            logger.error(f"  TRACEBACK:")
-            for line in traceback.format_exc().split('\n'):
-                if line.strip():
-                    logger.error(f"    {line}")
-            
-            # Log session state at time of failure
-            logger.error(f"SESSION STATE AT FAILURE:")
-            logger.error(f"  step: {st.session_state.step}")
-            logger.error(f"  extraction: {type(st.session_state.extraction)} = {st.session_state.extraction is not None}")
-            logger.error(f"  comms: {type(st.session_state.comms)} = {st.session_state.comms is not None}")
-            logger.error(f"  error: {type(st.session_state.error)} = {st.session_state.error}")
-            logger.error(f"  uploaded_files: {type(st.session_state.uploaded_files)} = {st.session_state.uploaded_files is not None}")
-            
-            # Store error and reset
-            error_string = str(e)
-            logger.error(f"STORING ERROR IN SESSION STATE: {error_string}")
-            st.session_state.error = error_string
-            
-            logger.error(f"RESETING STEP TO 'upload'")
+            logger.error(f"processing: EXCEPTION {type(e).__name__}: {e}")
+            logger.error("processing: FULL TRACEBACK\n" + _tb.format_exc())
+            st.session_state.error = f"{type(e).__name__}: {e}"
             st.session_state.step = "upload"
-            logger.error(f"FINAL STEP BEFORE RERUN: {st.session_state.step}")
-            logger.error("TRIGGERING RERUN DUE TO EXCEPTION...")
-            st.rerun()
+
+        # st.rerun() MUST be outside the try block — it raises RerunException internally
+        # which except Exception would catch, silently resetting state to upload.
+        st.rerun()
 
     # ── Step 3: Results ─────────────────────────────────────────────────────
     elif st.session_state.step == "results":
-        logger.info("=== STEP 3: RESULTS ===")
+        logger.info("=== RESULTS STEP ===")
         if not (st.session_state.comms and st.session_state.extraction):
-            logger.error("Missing comms or extraction in results step, resetting to upload")
+            logger.error(f"results: missing state — comms={st.session_state.comms is not None} "
+                         f"extraction={st.session_state.extraction is not None} — resetting to upload")
             st.session_state.step = "upload"
             st.rerun()
             return
-
-        logger.info("Rendering results page...")
 
         def _zone(label: str, sublabel: str = "") -> None:
             sub_html = f'<span style="font-size:11px;font-weight:400;color:#94a3b8;margin-left:8px;">{sublabel}</span>' if sublabel else ""
@@ -2116,16 +1864,42 @@ def main():
                 unsafe_allow_html=True,
             )
 
+        st.caption(
+            "**How to use this page:** "
+            "① Review the status page draft below. "
+            "② Check that it passes quality checks (Zone 3). "
+            "③ Verify each factual claim in the IC Verification section. "
+            "④ Complete the pre-publish checklist to unlock the copy button."
+        )
+
         # ── Zone 1: Context ──────────────────────────────────────────────────
-        _zone("Pre-Flight Context")
+        _zone("① Pre-Flight Context", "deployments near incident onset")
+        st.caption(
+            "Deployments flagged within 60 min before onset (potential causes) "
+            "and 30 min after (potential worsening factors). "
+            "**HIGH** = same service as the alert. **LOW** = different service. "
+            "The AI has already factored these into its root cause analysis."
+        )
         render_deployment_alerts(st.session_state.get("deployment_flags") or [])
 
         # ── Zone 2: Status Page Output ───────────────────────────────────────
-        _zone("Status Page Preview", "what will be published")
+        _zone("② Status Page Draft", "AI-generated communications — review before publishing")
+        st.caption(
+            "These are the draft status page messages the AI generated from your incident data, "
+            "newest stage first. Each stage represents a point in the incident timeline. "
+            "Read them top to bottom to see how the incident story unfolds."
+        )
         render_status_page(st.session_state.comms, st.session_state.extraction)
 
         # ── Zone 3: Quality Checks ───────────────────────────────────────────
-        _zone("Quality Checks", "before you publish")
+        _zone("③ Quality Checks", "automated validation of required fields")
+        st.caption(
+            "The AI checks each message for required content. "
+            "**Red** = critical missing field that must be fixed before publishing "
+            "(e.g. no mention of what's NOT affected — required for a security product). "
+            "**Yellow** = recommended fix. "
+            "**Green** = all checks passed."
+        )
 
         # Extraction consistency flags (cross-checks between pattern and SFI)
         consistency_flags = st.session_state.get("consistency_flags") or []
@@ -2135,23 +1909,35 @@ def main():
                 detail = cf.get("detail", "")
                 field  = cf.get("field", "")
                 if sev == "high":
-                    st.error(f"**Consistency flag — {field}:** {detail}")
+                    st.error(f"**Logic conflict — {field}:** {detail}")
                 else:
-                    st.warning(f"**Consistency flag — {field}:** {detail}")
+                    st.warning(f"**Logic conflict — {field}:** {detail}")
 
         render_validation(st.session_state.get("validation_warnings") or [])
 
         # ── Zone 4: IC Verification ──────────────────────────────────────────
-        _zone("Incident Commander Verification", "review evidence before publishing")
+        _zone("④ IC Verification", "verify AI reasoning before publishing")
+        st.caption(
+            "The AI answers 5 key questions an incident commander must confirm before publishing. "
+            "Each card shows the AI's conclusion and the raw evidence it used. "
+            "Mark each as **✅ Verified** (you agree) or **❌ Disputed** (something is wrong). "
+            "All 5 must be verified and none disputed to unlock the copy button. "
+            "Cards with disputed claims auto-expand."
+        )
         _et_files = st.session_state.sample_data or st.session_state.uploaded_files or {}
         render_evidence_trace(st.session_state.extraction, st.session_state.comms, _et_files)
 
         # ── Zone 5: Analyst View (collapsed by default) ──────────────────────
-        _zone("Analyst View", "optional — pattern & inference detail")
+        _zone("Analyst View", "optional — incident pattern classification and inference log")
+        st.caption(
+            "How the AI classified this incident (e.g. deployment-induced, infrastructure cascade) "
+            "and the chain of evidence behind each factual claim. Useful for audit trails and trend analysis."
+        )
         render_pattern_analysis(st.session_state.extraction)
 
         # ── Zone 6: Raw Extraction (collapsed by default) ────────────────────
-        _zone("Raw Extraction Data", "optional — full structured output")
+        _zone("Raw Extraction Data", "optional — full structured output from AI")
+        st.caption("The complete structured JSON the AI extracted. Useful for debugging or integrating with other tools.")
         render_structured_analysis(st.session_state.extraction)
 
         st.markdown("---")
@@ -2167,8 +1953,7 @@ def main():
                     st.session_state[key] = None if key != "step" else "upload"
                 st.rerun()
 
-    logger.info("=== MAIN FUNCTION COMPLETED ===")
-    logger.info(f"Final session state step: {st.session_state.step}")
+    logger.info(f"=== RERUN COMPLETE step={st.session_state.step} ===")
 
 
 if __name__ == "__main__":
