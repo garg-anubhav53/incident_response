@@ -286,7 +286,7 @@ st.markdown(CSS_STYLES, unsafe_allow_html=True)
 st.markdown("""
 <div class="status-container">
     <div class="status-header">
-        <h1>Incident Communications Generator</h1>
+        <h1>Incident Scribe</h1>
     </div>
 </div>
 """, unsafe_allow_html=True)

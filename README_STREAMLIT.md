@@ -1,4 +1,4 @@
-# Streamlit Incident Communications Generator
+# Streamlit Incident Scribe
 
 ## Overview
 

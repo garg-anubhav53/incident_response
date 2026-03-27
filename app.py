@@ -28,7 +28,7 @@ client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 logger.info(f"Anthropic client initialized, API key present: {bool(os.getenv('ANTHROPIC_API_KEY'))}")
 
 st.set_page_config(
-    page_title="Incident Communications Generator",
+    page_title="Incident Scribe",
     page_icon="🚨",
     layout="centered",
     initial_sidebar_state="expanded",
@@ -432,6 +432,139 @@ Return ONLY valid JSON, no markdown fencing:
     {"stage": "resolved",      "posted_at_pt": "4:50 PM PT", "message": "..."}
   ]
 }"""
+
+
+# ── Tone rewrite prompt builder ───────────────────────────────────────────────
+# Haiku is used for rewrites because the hard reasoning (extraction) is already complete.
+# The rewrite model receives structured facts and only adjusts tone, length, and emphasis.
+# This enables near-instant regeneration: Haiku rewrites complete in ~1-2s vs ~8-12s for Sonnet.
+_TONE_INSTRUCTIONS = {
+    "Technical":    ("Precise technical language. Name specific services and capabilities by their full product names. "
+                     "Include exact timestamps and quantitative detail where available. "
+                     "Write for a sophisticated SOC team or security engineer who wants factual density, not reassurance."),
+    "Balanced":     ("Clear, professional language accessible to both technical and non-technical readers. "
+                     "This is the default register for a broad customer audience."),
+    "Reassuring":   ("Plain, empathetic language. Focus on what is working and what has been resolved. "
+                     "Minimize technical terminology. Lead with safety and continuity of protection. "
+                     "Write for a business audience asking 'am I safe' — not how the system works."),
+}
+_DETAIL_INSTRUCTIONS = {
+    "Brief":    ("2-3 sentences per stage update — headline facts only. "
+                 "What happened, what's not affected, current status. Cut everything else. Target 40-60 words."),
+    "Standard": ("4-6 sentences per stage update, roughly 60-100 words. Include all six required fields. Default."),
+    "Detailed": ("Up to 150 words per stage update. Include full timeline precision, specific capability details, "
+                 "and thorough confirmation of what's not affected. Do not pad — only add detail that is genuinely informative."),
+}
+_EMPHASIS_INSTRUCTIONS = {
+    "Customer Impact":      ("Lead each update with what customers are experiencing or experienced. "
+                             "What does this mean for their work and protection? Customer experience first, then action."),
+    "Resolution Progress":  ("Lead each update with operational status and what the engineering team is actively doing. "
+                             "Progress and action are the opening frame. Impact is secondary."),
+    "Root Cause":           ("Lead each update with why this happened — the cause and mechanism. "
+                             "Appropriate for postmortem-style communication or when customers explicitly ask how this occurred."),
+}
+
+def build_rewrite_prompt(tone: str, detail: str, emphasis: str) -> str:
+    return f"""You are rewriting status page communications for an enterprise SaaS security company. The incident analysis is complete — do not alter any facts. Your only job is to rephrase and restructure the existing facts according to the controls below.
+
+IMMUTABLE FACTS: The extraction data is the single source of truth. Do not change what is affected, what is not affected, the timeline, the severity, the root cause, or the security function status. Only change how these facts are expressed.
+
+TONE — {tone}: {_TONE_INSTRUCTIONS[tone]}
+
+DETAIL LEVEL — {detail}: {_DETAIL_INSTRUCTIONS[detail]}
+
+EMPHASIS — {emphasis}: {_EMPHASIS_INSTRUCTIONS[emphasis]}
+
+MESSAGE STRUCTURE: Every stage message must contain these elements in order — (1) What happened + timestamp. (2) What is NOT affected (mandatory second sentence, never cut). (3) Customer impact. (4) Engineering action. (5) Customer action. (6) Next update timing (omit for Resolved). The Brief detail level may compress 3-6 into one sentence but must never omit element 2.
+
+URGENCY CALIBRATION — sentence 2 content is determined by detection_status and remediation_status in the extraction:
+- detection_status "degraded": "Email security detection is currently degraded, and some threats may not be detected or acted upon automatically."
+- detection_status "offline": "Email security detection is currently offline, and threats may not be detected or remediated automatically."
+- remediation_status "degraded"/"offline", detection operational: "Email security detection remains fully operational; however, automated remediation [is degraded / is offline], and detected threats should be reviewed manually."
+- Both fully_operational: "Email security detection and automated remediation remain fully operational and continue to protect against threats."
+- detection_status "unknown": "We are confirming the status of email security detection services and will provide an update shortly."
+
+RULES:
+1. No internal details: no engineer names, hostnames, PR numbers, commit SHAs.
+2. Timestamps in PT formatted "2:30 PM PT". DST: March-October = UTC-7; November-February = UTC-8.
+3. Resolved update: include start time, resolution time, total duration.
+4. Only include stages present in the original communications — do not add or remove stages.
+5. Preserve the posted_at_pt times from the original exactly.
+
+Return ONLY valid JSON, no markdown fencing, same structure as original:
+{{"title": "...", "communications": [{{"stage": "...", "posted_at_pt": "...", "message": "..."}}]}}"""
+
+
+def run_rewrite(extraction: dict, comms: dict, tone: str, detail: str, emphasis: str) -> dict:
+    """Rewrite status page communications using Haiku for near-instant regeneration."""
+    logger.info(f"run_rewrite: tone={tone} detail={detail} emphasis={emphasis}")
+    system_prompt = build_rewrite_prompt(tone, detail, emphasis)
+    user_message = (
+        f"CURRENT COMMUNICATIONS (facts to preserve, prose to rewrite):\n{json.dumps(comms, indent=2)}\n\n"
+        f"EXTRACTION (immutable source of truth):\n{json.dumps(extraction, indent=2)}"
+    )
+    # Haiku: fast rewrite model — reasoning already done by Sonnet in extraction
+    result = call_claude(user_message, system_prompt, max_tokens=1024, temperature=0.3,
+                         model="claude-haiku-4-5-20251001")
+    logger.info(f"run_rewrite: DONE stages={[c.get('stage') for c in result.get('communications', [])]}")
+    STAGE_ORDER = {"investigating": 0, "identified": 1, "monitoring": 2, "resolved": 3}
+    if "communications" in result:
+        result["communications"].sort(key=lambda c: STAGE_ORDER.get(c.get("stage", ""), 99))
+    return result
+
+
+# ── Customer outreach system prompt ───────────────────────────────────────────
+OUTREACH_SYSTEM_PROMPT = """You are a customer success manager at Abnormal Security writing a tailored outreach email following a production incident. You have the full incident analysis and the public status page communications.
+
+Your primary job is to select the RIGHT DETAILS for this specific customer — not just adjust tone. The status page is a broadcast; this email surfaces what matters to this particular account based on their products, integrations, tenure, and relationship context.
+
+WHAT TO INCLUDE OR EMPHASIZE (based on the customer description):
+- Products they use (IES, ATO, AISM, AIPC, SOAR API, SIEM API, EPR, Portal): confirm whether each of their specific products was affected or unaffected. Use the extraction's affected_products and unaffected_functionality. Only mention products relevant to this customer.
+- Long-tenure or high-volume customers: be more transparent about root cause and timeline than the public status page allows. Acknowledge the relationship.
+- API-dependent customers (SOAR, SIEM): explicitly confirm whether automated workflows and playbooks were impacted, using remediation_status from the extraction.
+- Technical audience (CISO, security engineer): include root cause mechanism, precise timestamps, confirmation of detection/remediation health per the security_function_impact classification.
+- Non-technical or business buyer: translate to business impact only. Omit technical mechanism entirely. Lead with "your email protection was not affected" if that's true.
+- Customers with prior incident history or upcoming renewals: acknowledge the impact directly, show ownership, do not minimize.
+- Government / FedRAMP customers: formal register, compliance-relevant framing, no marketing language.
+
+USE THE SECURITY FUNCTION CLASSIFICATION:
+- If detection_status is fully_operational: confirm this explicitly — it is the most reassuring fact for a security product customer.
+- If detection_status is degraded or offline: acknowledge the exposure directly and what it meant for that customer's protection.
+- If remediation_status is degraded and the customer uses SOAR or relies on automated response: call this out specifically.
+
+CONSISTENCY (non-negotiable):
+1. Facts must match the public status page exactly: same start time, same end time, same affected service, same severity.
+2. The email may include more detail than the status page, but never contradicts it.
+3. Never include anything from internal_details_to_exclude: no engineer names, hostnames, PR numbers, commit SHAs.
+4. Write as the account team ("we" = Abnormal as a company), not the engineering team.
+
+FORMAT:
+- Subject line: specific ("Following up on today's IES latency incident"), never generic ("Status Update").
+- Greeting: by name or role if mentioned in the description, otherwise "Hi [Customer Team]".
+- Body: 2–4 short paragraphs. No bullet lists — this is a personal email, not a report.
+- Close: clear call to action appropriate to the customer, then a sign-off.
+- Under 200 words for non-technical/brief requests. Up to 300 words for technical or high-detail requests. Never longer.
+
+Return ONLY valid JSON:
+{"subject": "...", "body": "..."}"""
+
+
+# ── Executive brief system prompt ────────────────────────────────────────────
+EXEC_BRIEF_SYSTEM_PROMPT = """You are writing an internal executive summary of a production incident for leadership at a SaaS security company. You have the full structured incident analysis.
+
+Write exactly 3 sentences:
+1. What happened — service, severity, duration, customer impact scope in plain language.
+2. Security posture — was email detection or remediation affected? This is the single most important fact for a security vendor's leadership.
+3. Current status and next step — resolved or ongoing, what's being done.
+
+RULES:
+- Internal audience: you may reference root cause mechanism, deployment details, and pattern classification.
+- No jargon without explanation. Leadership reads this in 10 seconds.
+- Never speculate beyond what the extraction confirms. If detection status is unknown, say so.
+- Under 80 words total.
+
+Return ONLY valid JSON:
+{"executive_brief": "The 3-sentence summary."}"""
 
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
@@ -895,6 +1028,30 @@ def run_generation(extraction: dict) -> dict:
     return result
 
 
+def run_outreach(customer_description: str, extraction: dict, comms: dict) -> dict:
+    """Generate a customer-specific outreach email from natural language description."""
+    logger.info(f"run_outreach: description={len(customer_description)}chars")
+    user_message = (
+        f"CUSTOMER DESCRIPTION:\n{customer_description}\n\n"
+        f"PUBLIC STATUS PAGE COMMUNICATIONS:\n{json.dumps(comms, indent=2)}\n\n"
+        f"INCIDENT EXTRACTION:\n{json.dumps(extraction, indent=2)}"
+    )
+    result = call_claude(user_message, OUTREACH_SYSTEM_PROMPT, max_tokens=1200, temperature=0.4)
+    logger.info(f"run_outreach: DONE keys={list(result.keys()) if isinstance(result, dict) else type(result).__name__}")
+    return result
+
+
+def run_exec_brief(extraction: dict) -> str:
+    """Generate a 3-sentence executive brief from the extraction."""
+    logger.info("run_exec_brief: starting")
+    user_message = f"INCIDENT EXTRACTION:\n{json.dumps(extraction, indent=2)}"
+    result = call_claude(user_message, EXEC_BRIEF_SYSTEM_PROMPT, max_tokens=300, temperature=0.2,
+                         model="claude-haiku-4-5-20251001")
+    brief = result.get("executive_brief", "")
+    logger.info(f"run_exec_brief: DONE ({len(brief)} chars)")
+    return brief
+
+
 # ── Inference log persistence ──────────────────────────────────────────────────
 def save_inference_log(extraction: dict) -> None:
     logger.info("=== Saving Inference Log ===")
@@ -1171,9 +1328,17 @@ def render_evidence_trace(extraction: dict, comms: dict, file_contents: dict) ->
             ts_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
             age_h = (datetime.now(timezone.utc) - ts_dt).total_seconds() / 3600
             if age_h > 24:
+                # Human-friendly age label
+                age_days = int(age_h / 24)
+                if age_days > 365:
+                    age_label = f"over {age_days // 365} year{'s' if age_days // 365 > 1 else ''} ago"
+                elif age_days > 30:
+                    age_label = f"about {age_days // 30} month{'s' if age_days // 30 > 1 else ''} ago"
+                else:
+                    age_label = f"{age_days} day{'s' if age_days > 1 else ''} ago"
                 st.warning(
                     f"⏰ Analysis based on data from **{ts_dt.strftime('%b %d, %Y %H:%M UTC')}** "
-                    f"({int(age_h)}h ago). If the incident is still active, re-upload current data."
+                    f"({age_label}). If the incident is still active, re-upload current data."
                 )
         except Exception:
             pass
@@ -1378,10 +1543,12 @@ def render_status_page(comms: dict, extraction: dict) -> None:
             st.markdown(f":{sev_color}[**{sev_text}**]" + (f"  ·  *{duration_str}*" if duration_str else ""))
         with c2:
             st.markdown(f":{sfi_color}[{sfi_text}]")
+            if sfi_color == "gray":
+                st.caption("Verify detection status in the IC Verification section below before publishing.")
 
         st.markdown(
             f'<p style="font-size:13px;color:#64748b;margin:0.25rem 0 0.75rem 0;">'
-            f'📅 {incident_date} &nbsp;·&nbsp; Right badge: security function impact (red = detection may be down)</p>',
+            f'📅 {incident_date}</p>',
             unsafe_allow_html=True,
         )
 
@@ -1586,10 +1753,16 @@ def render_pattern_analysis(extraction: dict) -> None:
             if past_logs:
                 st.markdown("---")
                 st.markdown("**Recent Incident Patterns**")
+                seen_summaries = set()
                 for log in past_logs[:5]:
+                    summary_full = log.get("incident_summary", "")
+                    if summary_full in seen_summaries:
+                        continue
+                    seen_summaries.add(summary_full)
                     p = log.get("pattern_classification", {}).get("primary_pattern", "unknown")
-                    summary = log.get("incident_summary", "")[:80] + ("…" if len(log.get("incident_summary", "")) > 80 else "")
-                    st.markdown(f"- **{p.replace('_', ' ').title()}** — {summary}")
+                    summary = summary_full[:80] + ("…" if len(summary_full) > 80 else "")
+                    ts = log.get("analysis_timestamp", "")[:10]
+                    st.markdown(f"- **{p.replace('_', ' ').title()}** — {summary}" + (f" *({ts})*" if ts else ""))
         
         logger.info("=== render_pattern_analysis COMPLETED ===")
         
@@ -1703,7 +1876,7 @@ def main():
     
     st.markdown("""
     <div class="main-header">
-        <h1>🚨 Incident Communications Generator</h1>
+        <h1>🚨 Incident Scribe</h1>
         <p>Transform raw incident data into professional status page communications</p>
     </div>""", unsafe_allow_html=True)
 
@@ -1714,6 +1887,9 @@ def main():
         ("deployment_flags", None), ("validation_warnings", None),
         ("consistency_flags", None),
         ("verify_status", None), ("verify_notes", None), ("publish_checks", None),
+        ("outreach_emails", []),
+        ("rewrite_comms", None), ("exec_brief", None),
+        ("tone_control", "Balanced"), ("detail_control", "Standard"), ("emphasis_control", "Customer Impact"),
     ]:
         if key not in st.session_state:
             st.session_state[key] = default
@@ -1892,52 +2068,269 @@ def main():
                 unsafe_allow_html=True,
             )
 
+        # Dynamic zone numbering — zones renumber when deployment context is hidden
+        _deployment_flags = st.session_state.get("deployment_flags") or []
+        _has_deploy_zone = bool(_deployment_flags)
+        _zn = 0  # zone counter
+
         _note("① Review the draft → ② Check quality flags → ③ Verify evidence → ④ Complete checklist → Copy.")
 
-        # ── Zone 1: Context ─────────────────────────────────────────────────
-        # Only show if there are deployment flags to display
-        _deployment_flags = st.session_state.get("deployment_flags") or []
-        if _deployment_flags:
-            _zone("① Pre-Flight Context", "deployments near onset")
+        # ── Zone: Pre-Flight Context ────────────────────────────────────────
+        if _has_deploy_zone:
+            _zn += 1
+            _zone(f"{'①②③④⑤⑥'[_zn-1]} Pre-Flight Context", "deployments near onset")
             _note("HIGH = same service as alert, pre-onset. LOW = different service. POST-ONSET = possible worsening factor.")
             render_deployment_alerts(_deployment_flags)
 
-        # ── Zone 2: Status Page Draft ─────────────────────────────────────────
-        _zone("② Status Page Draft", "newest stage first")
-        render_status_page(st.session_state.comms, st.session_state.extraction)
+        # ── Zone: Status Page Draft ───────────────────────────────────────────
+        _zn += 1
+        _active_comms = st.session_state.get("rewrite_comms") or st.session_state.comms
+        _is_rewrite   = st.session_state.get("rewrite_comms") is not None
+        _zone(f"{'①②③④⑤⑥'[_zn-1]} Status Page Draft",
+              f"newest stage first · {'rewritten: ' + st.session_state.tone_control + ' / ' + st.session_state.detail_control + ' / ' + st.session_state.emphasis_control if _is_rewrite else 'original draft'}")
+        render_status_page(_active_comms, st.session_state.extraction)
+
+        # ── Export button ─────────────────────────────────────────────────────
+        _export_text = _format_comms_for_copy(_active_comms)
+        _dl1, _dl2, _dl3 = st.columns([1, 1, 1])
+        with _dl2:
+            st.download_button(
+                "⬇ Download as text",
+                data=_export_text,
+                file_name=f"incident_comms_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                mime="text/plain",
+                use_container_width=True,
+            )
+
+        # ── Side-by-side reference ────────────────────────────────────────────
+        with st.expander("📖 Compare with real Abnormal status page post", expanded=False):
+            _ref_col1, _ref_col2 = st.columns(2)
+            with _ref_col1:
+                st.markdown("**Real Abnormal Post** *(IES disruption, Mar 16 2026)*")
+                st.markdown(
+                    '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;'
+                    'padding:1rem;font-size:0.85rem;color:#334155;line-height:1.7;">'
+                    'Starting around 22:23 UTC on March 16, 2026, Abnormal began experiencing a '
+                    'service disruption impacting Inbound Email Security detection and remediation '
+                    'for some US customers. Additionally, inline email processing is affected during '
+                    'this time, and malicious emails may not be properly detected or remediated. '
+                    "Abnormal's engineering team is actively investigating and working to restore "
+                    'full functionality. The next update will be provided within 1 hour or when '
+                    'further information is obtained.</div>',
+                    unsafe_allow_html=True,
+                )
+            with _ref_col2:
+                st.markdown("**Generated Draft** *(Investigating stage)*")
+                _inv_msg = next(
+                    (c.get("message", "") for c in _active_comms.get("communications", [])
+                     if c.get("stage") == "investigating"),
+                    "No investigating stage generated.",
+                )
+                st.markdown(
+                    f'<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;'
+                    f'padding:1rem;font-size:0.85rem;color:#334155;line-height:1.7;">{_inv_msg}</div>',
+                    unsafe_allow_html=True,
+                )
+            st.caption("Reference posts from status.abnormalsecurity.com help calibrate tone, structure, and length.")
+
+        # ── Tone / Detail / Emphasis controls ────────────────────────────────
+        st.markdown(
+            '<div style="font-size:12px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;'
+            'color:#94a3b8;padding:1.2rem 0 0.5rem 0;border-top:1px solid #e2e8f0;'
+            'margin-top:1rem;">Adjust Communications</div>',
+            unsafe_allow_html=True,
+        )
+        _note("Changes regenerate using Haiku (fast rewrite). Facts and evidence trace do not change — only phrasing, length, and emphasis.")
+        tc1, tc2, tc3 = st.columns(3)
+        with tc1:
+            tone_val = st.selectbox(
+                "Tone",
+                ["Balanced", "Technical", "Reassuring"],
+                index=["Balanced", "Technical", "Reassuring"].index(
+                    st.session_state.get("tone_control", "Balanced")),
+                key="tone_select",
+            )
+        with tc2:
+            detail_val = st.selectbox(
+                "Detail Level",
+                ["Standard", "Brief", "Detailed"],
+                index=["Standard", "Brief", "Detailed"].index(
+                    st.session_state.get("detail_control", "Standard")),
+                key="detail_select",
+            )
+        with tc3:
+            emphasis_val = st.selectbox(
+                "Emphasis",
+                ["Customer Impact", "Resolution Progress", "Root Cause"],
+                index=["Customer Impact", "Resolution Progress", "Root Cause"].index(
+                    st.session_state.get("emphasis_control", "Customer Impact")),
+                key="emphasis_select",
+            )
+
+        rb1, rb2 = st.columns([2, 1])
+        with rb1:
+            if st.button("↺ Regenerate with these settings", type="secondary", use_container_width=True):
+                st.session_state.tone_control     = tone_val
+                st.session_state.detail_control   = detail_val
+                st.session_state.emphasis_control = emphasis_val
+                with st.spinner("Rewriting with Haiku…"):
+                    try:
+                        rewrite_result = run_rewrite(
+                            st.session_state.extraction,
+                            st.session_state.comms,
+                            tone_val, detail_val, emphasis_val,
+                        )
+                        st.session_state.rewrite_comms = rewrite_result
+                        # Re-validate rewritten communications
+                        st.session_state.validation_warnings = validate_communications(
+                            rewrite_result, st.session_state.extraction)
+                    except Exception as _re:
+                        logger.error(f"run_rewrite failed: {_re}")
+                        st.error(f"Regeneration failed: {_re}")
+                st.rerun()
+        with rb2:
+            if _is_rewrite:
+                if st.button("Reset to original", use_container_width=True):
+                    st.session_state.rewrite_comms      = None
+                    st.session_state.tone_control       = "Balanced"
+                    st.session_state.detail_control     = "Standard"
+                    st.session_state.emphasis_control   = "Customer Impact"
+                    st.session_state.validation_warnings = validate_communications(
+                        st.session_state.comms, st.session_state.extraction)
+                    st.rerun()
+
+        # ── Executive Brief ────────────────────────────────────────────────
+        st.markdown(
+            '<div style="font-size:12px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;'
+            'color:#94a3b8;padding:1.5rem 0 0.4rem 0;border-top:1px solid #e2e8f0;'
+            'margin-top:1.5rem;">Executive Brief</div>',
+            unsafe_allow_html=True,
+        )
+        _note("3-sentence internal summary for leadership. Not customer-facing.")
+        if st.session_state.get("exec_brief"):
+            st.markdown(
+                f'<div style="background:#f8fafc;border:1px solid #e2e8f0;border-left:4px solid #4f46e5;'
+                f'border-radius:8px;padding:1rem 1.25rem;color:#334155;font-size:0.95rem;line-height:1.7;">'
+                f'{st.session_state.exec_brief}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            if st.button("Generate Executive Brief", type="secondary"):
+                with st.spinner("Generating brief…"):
+                    try:
+                        brief = run_exec_brief(st.session_state.extraction)
+                        st.session_state.exec_brief = brief
+                        st.rerun()
+                    except Exception as _eb:
+                        logger.error(f"run_exec_brief failed: {_eb}")
+                        st.error(f"Generation failed: {_eb}")
+
+        # ── Customer Outreach (below tone controls, before Zone 3) ──────────
+        st.markdown(
+            '<div style="font-size:12px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;'
+            'color:#94a3b8;padding:1.5rem 0 0.4rem 0;border-top:1px solid #e2e8f0;'
+            'margin-top:1.5rem;">Customer-Specific Outreach</div>',
+            unsafe_allow_html=True,
+        )
+        _note("Describe a specific customer in plain language — their products, tenure, integration setup, relationship context. The same incident data generates a tailored email for each account.")
+
+        outreach_col, _ = st.columns([3, 1])
+        with outreach_col:
+            outreach_description = st.text_area(
+                "Customer context",
+                placeholder=(
+                    "e.g. Long-time enterprise customer, heavy IES and AISM user, their CISO reads these directly — "
+                    "include root cause detail and confirm account takeover monitoring was unaffected."
+                ),
+                height=90,
+                label_visibility="collapsed",
+                key="outreach_input",
+            )
+            if st.button("Generate Outreach Email", type="secondary"):
+                if not (outreach_description or "").strip():
+                    st.warning("Describe the customer before generating.")
+                else:
+                    with st.spinner("Drafting customer email…"):
+                        try:
+                            result = run_outreach(
+                                outreach_description,
+                                st.session_state.extraction,
+                                st.session_state.comms,
+                            )
+                            if "outreach_emails" not in st.session_state or not isinstance(st.session_state.outreach_emails, list):
+                                st.session_state.outreach_emails = []
+                            st.session_state.outreach_emails.append({
+                                "description": outreach_description,
+                                "subject":     result.get("subject", ""),
+                                "body":        result.get("body", ""),
+                            })
+                            st.rerun()
+                        except Exception as _oe:
+                            logger.error(f"run_outreach failed: {_oe}")
+                            st.error(f"Generation failed: {_oe}. Existing results are unchanged.")
+
+        # Display generated outreach cards (newest first)
+        for idx, email in enumerate(reversed(st.session_state.get("outreach_emails") or [])):
+            with st.container(border=True):
+                st.markdown(
+                    f'<p style="font-size:11px;color:#94a3b8;margin:0 0 0.25rem 0;">'
+                    f'Customer context: <em>{email["description"][:120]}{"…" if len(email["description"]) > 120 else ""}</em></p>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(f"**Subject:** {email['subject']}")
+                st.markdown(email["body"])
+                copy_text = f"Subject: {email['subject']}\n\n{email['body']}"
+                with st.expander("Copy email text", expanded=False):
+                    st.code(copy_text, language="text")
 
         # ── Zone 3: Quality Checks ───────────────────────────────────────────
         _consistency_flags = st.session_state.get("consistency_flags") or []
         _validation_warnings = st.session_state.get("validation_warnings") or []
         _has_quality_issues = bool(_consistency_flags) or bool(_validation_warnings)
 
+        _zn += 1
+        _qc_num = f"{'①②③④⑤⑥'[_zn-1]}"
         if _has_quality_issues:
-            _zone("③ Quality Checks", "required fields validation")
+            _zone(f"{_qc_num} Quality Checks", "required fields validation")
             _note("Red = must fix before publishing. Yellow = recommended.")
-            for cf in _consistency_flags:
-                sev = cf.get("severity", "medium")
-                detail = cf.get("detail", "")
-                field  = cf.get("field", "")
-                if sev == "high":
-                    st.error(f"**Logic conflict — {field}:** {detail}")
-                else:
-                    st.warning(f"**Logic conflict — {field}:** {detail}")
-            render_validation(_validation_warnings)
+            # Show high-severity items first (consistency + validation), then medium
+            _all_high = [cf for cf in _consistency_flags if cf.get("severity") == "high"]
+            for w in _validation_warnings:
+                if w.get("severity") == "high":
+                    _all_high.append(w)
+            for item in _all_high:
+                field = item.get("field", "")
+                detail = item.get("detail", "")
+                stage = item.get("stage", "")
+                prefix = f"[{stage.title()}] Missing: " if stage else "Logic conflict — "
+                st.error(f"**{prefix}{field}** — {detail}" + (" *(Critical for security vendor)*" if stage else ""))
+            _all_medium_cf = [cf for cf in _consistency_flags if cf.get("severity") != "high"]
+            _all_medium_vw = [w for w in _validation_warnings if w.get("severity") != "high"]
+            _all_medium = _all_medium_cf + _all_medium_vw
+            if _all_medium:
+                with st.expander(f"⚠️ {len(_all_medium)} medium-severity warning(s)", expanded=False):
+                    for item in _all_medium:
+                        field = item.get("field", "")
+                        detail = item.get("detail", "")
+                        stage = item.get("stage", "")
+                        prefix = f"[{stage.title()}] Missing: " if stage else "Logic conflict — "
+                        st.warning(f"**{prefix}{field}** — {detail}")
         else:
-            _zone("③ Quality Checks", "all clear")
+            _zone(f"{_qc_num} Quality Checks", "all clear")
             st.success("✅ All communications pass required field and consistency validation.")
 
-        # ── Zone 4: IC Verification ──────────────────────────────────────────
-        _zone("④ IC Verification", "verify before publishing")
+        # ── Zone: IC Verification ────────────────────────────────────────────
+        _zn += 1
+        _zone(f"{'①②③④⑤⑥'[_zn-1]} IC Verification", "verify before publishing")
         _note("5 questions the AI answered from raw evidence. Mark Verified ✅ or Disputed ❌. All 5 must be verified to unlock copy.")
         _et_files = st.session_state.sample_data or st.session_state.uploaded_files or {}
         render_evidence_trace(st.session_state.extraction, st.session_state.comms, _et_files)
 
-        # ── Zone 5: Analyst View (collapsed by default) ──────────────────────
+        # ── Analyst View (collapsed by default) ──────────────────────────────
         _zone("Analyst View", "optional")
         render_pattern_analysis(st.session_state.extraction)
 
-        # ── Zone 6: Raw Extraction (collapsed by default) ────────────────────
+        # ── Raw Extraction (collapsed by default) ────────────────────────────
         _zone("Raw Extraction Data", "optional")
         render_structured_analysis(st.session_state.extraction)
 
@@ -1950,8 +2343,21 @@ def main():
                             "uploaded_files", "sample_data",
                             "deployment_flags", "validation_warnings",
                             "consistency_flags",
-                            "verify_status", "verify_notes", "publish_checks"):
-                    st.session_state[key] = None if key != "step" else "upload"
+                            "verify_status", "verify_notes", "publish_checks",
+                            "outreach_emails", "rewrite_comms", "exec_brief",
+                            "tone_control", "detail_control", "emphasis_control"):
+                    if key == "step":
+                        st.session_state[key] = "upload"
+                    elif key == "outreach_emails":
+                        st.session_state[key] = []
+                    elif key == "tone_control":
+                        st.session_state[key] = "Balanced"
+                    elif key == "detail_control":
+                        st.session_state[key] = "Standard"
+                    elif key == "emphasis_control":
+                        st.session_state[key] = "Customer Impact"
+                    else:
+                        st.session_state[key] = None
                 st.rerun()
 
     logger.info(f"=== RERUN COMPLETE step={st.session_state.step} ===")

@@ -1,4 +1,4 @@
-# Codebase Walkthrough: Incident Communications Generator
+# Codebase Walkthrough: Incident Scribe
 
 ## Overview
 
