@@ -121,6 +121,69 @@ CSS_STYLES = """
     font-weight: 600;
 }
 
+/* ═══════════════════════════════════════════════════
+   TYPE SCALE — five explicit levels, no default sizes
+   L1  app banner h1     2.2rem  800  (in .main-header)
+   L2  zone header       1.25rem 800  uppercase   (.zone-header)
+   L3  card/item title   1.25rem 700  normal       (.heading-card)
+   L4  sub-section label 0.95rem 600  normal       (.heading-sub)
+   L5  body              0.9rem  400               (.text-body / default)
+   L6  meta / captions   0.8rem  400  muted        (inline or .text-meta)
+═══════════════════════════════════════════════════ */
+
+/* L2 — Zone section dividers (① Status Page Draft, ② Quality Checks …) */
+.zone-header {
+    font-size: 1.25rem;
+    font-weight: 800;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #0f172a;
+    padding: 0.55rem 0 0.35rem 0;
+    border-bottom: 2.5px solid #cbd5e1;
+    margin: 2.25rem 0 1rem 0;
+    line-height: 1.3;
+}
+.zone-header .zone-sub {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: #64748b;
+    text-transform: none;
+    letter-spacing: 0;
+    margin-left: 12px;
+    vertical-align: middle;
+}
+
+/* L3 — Primary card/item titles (incident title, page-level named things) */
+.heading-card {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #0f172a;
+    margin: 0.25rem 0 0.85rem 0;
+    line-height: 1.35;
+}
+
+/* L4 — Sub-section labels inside expanders / cards */
+.heading-sub {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #1e293b;
+    margin: 0.9rem 0 0.35rem 0;
+}
+
+/* L5 — stage labels on comms cards (Resolved / Monitoring …) */
+.comm-stage-label {
+    font-size: 0.95rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 3px;
+}
+.comm-stage-meta {
+    font-size: 0.78rem;
+    color: #94a3b8;
+    margin-bottom: 10px;
+}
+
 /* ── Status page container ── */
 .status-container { max-width: 760px; margin: 0 auto; padding: 0 8px; }
 
@@ -161,8 +224,8 @@ CSS_STYLES = """
     border: 1px solid #e2e8f0;
 }
 .incident-title {
-    font-size: 16px;
-    font-weight: 700;
+    font-size: 20px;
+    font-weight: 800;
     color: #0f172a;
     margin-bottom: 20px;
     display: flex;
@@ -342,7 +405,7 @@ CRITICAL RULES:
 0. NULL OVER HALLUCINATION (OVERRIDES ALL): If a required field cannot be determined from the provided data, use null for scalar fields and [] for arrays. Never invent plausible-sounding values. A confident-looking fabrication is worse than an explicit null. When uncertain, be explicitly uncertain.
 1. NEVER state a fact without source support. If you cannot determine something, say so in data_gaps with a specific explanation of what is missing and why it matters.
 2. Distinguish CONFIRMED root cause (engineers said "found it", "confirmed", "that's it") from HYPOTHESIS ("I think", "maybe", "could be"). Set root_cause.status accordingly. ROLLBACK = CONFIRMATION: if a rollback of a specific deployment resolves the incident, set root_cause.status="confirmed" even without an explicit engineer statement — a successful rollback is confirmation in action.
-3. Cross-reference timestamps across ALL sources. Flag inconsistencies in data_gaps.
+3. Cross-reference timestamps across ALL sources. Flag inconsistencies in data_gaps. NOTE: The INCIDENT CONTEXT (SLACK THREAD) section is the engineering Slack thread and IS a valid source of engineer discussion, root cause confirmation, and timeline data — treat it as Slack data regardless of how its timestamps are formatted. Slack timestamps may appear in 12-hour local time (e.g. "[2:45 PM]") rather than UTC; resolve the UTC equivalent by cross-referencing with PagerDuty/GitHub/metrics UTC timestamps that anchor the same events. Do NOT report "No Slack data provided" when this section is present.
 4. A deployment is root cause ONLY IF: deployed to SAME failing service AND timing correlates AND (engineers confirmed OR rollback fixed it). Unrelated deploys: note in inference_log but do not attribute causation.
 5. For metrics: baseline = pre-incident normal (first 2 readings). Anomaly = >2x or <0.5x baseline. Note if recovery is gradual or sudden. Cite specific timestamp-value pairs — do not summarize to counts.
 6. For scope: only state what data proves. If data mentions only one region/service, flag others as unconfirmed — do NOT assume unaffected.
@@ -1471,8 +1534,6 @@ def render_evidence_trace(extraction: dict, comms: dict, file_contents: dict) ->
     if "publish_checks" not in st.session_state or st.session_state.publish_checks is None:
         st.session_state.publish_checks = {c: False for c in _PUBLISH_CHECKS}
 
-    st.markdown("### 🛡️ Verify Before Publishing")
-
     # ── Stale data warning ──
     tl = extraction.get("timeline", {})
     ts_str = tl.get("detection_time_utc") or tl.get("onset_time_utc")
@@ -1705,12 +1766,15 @@ def render_status_page(comms: dict, extraction: dict) -> None:
             unsafe_allow_html=True,
         )
 
-        st.markdown(f"**{comms.get('title', 'Incident')}**")
         st.markdown(
-            '<p style="font-size:13px;color:#64748b;margin:0 0 0.5rem 0;">'
+            f'<div class="heading-card">{comms.get("title", "Incident")}</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p style="font-size:12px;color:#94a3b8;margin:-0.3rem 0 0.75rem 0;">'
             '<span style="color:#16a34a;">■</span> ≤100w &nbsp;'
             '<span style="color:#d97706;">■</span> ≤110w &nbsp;'
-            '<span style="color:#dc2626;">■</span> >110w — word count per message</p>',
+            '<span style="color:#dc2626;">■</span> &gt;110w — word count per message</p>',
             unsafe_allow_html=True,
         )
 
@@ -1722,21 +1786,26 @@ def render_status_page(comms: dict, extraction: dict) -> None:
             "investigating":"red",
         }
 
-        def _wc_label(text: str) -> str:
-            wc = len(text.split())
-            if wc <= 100:   return f":green[{wc}w]"
-            elif wc <= 110: return f":orange[{wc}w]"
-            else:           return f":red[{wc}w ⚠]"
+        stage_hex = {
+            "resolved":      "#059669",
+            "monitoring":    "#0284c7",
+            "identified":    "#ea580c",
+            "investigating": "#dc2626",
+        }
 
         for comm in reversed(communications):
             stage   = comm.get("stage", "unknown")
             posted  = comm.get("posted_at_pt", "")
             message = comm.get("message", "")
-            color   = stage_colors.get(stage, "gray")
+            hex_col = stage_hex.get(stage, "#64748b")
+            wc      = len(message.split())
+            wc_col  = "#16a34a" if wc <= 100 else ("#d97706" if wc <= 110 else "#dc2626")
             with st.container(border=True):
                 st.markdown(
-                    f":{color}[**{stage.title()}**]  ·  "
-                    f"*{posted}*  ·  {_wc_label(message)}"
+                    f'<div class="comm-stage-label" style="color:{hex_col};">{stage.title()}</div>'
+                    f'<div class="comm-stage-meta">{posted}'
+                    f' &nbsp;·&nbsp; <span style="color:{wc_col};font-weight:600;">{wc}w</span></div>',
+                    unsafe_allow_html=True,
                 )
                 st.markdown(message)
 
@@ -1754,7 +1823,7 @@ def render_structured_analysis(extraction: dict) -> None:
             # ── Security Function Status (top of expander) ──
             sfi = extraction.get("security_function_impact", {})
             if sfi:
-                st.markdown("**Security Function Status**")
+                st.markdown('<div class="heading-sub">Security Function Status</div>', unsafe_allow_html=True)
                 STATUS_CLS  = {"fully_operational": "sfi-operational", "degraded": "sfi-degraded",
                                "offline": "sfi-offline", "unknown": "sfi-unknown"}
                 STATUS_ICON = {"fully_operational": "🟢", "degraded": "🟡",
@@ -1788,31 +1857,31 @@ def render_structured_analysis(extraction: dict) -> None:
 
             col1, col2 = st.columns(2)
             with col1:
-                st.markdown("**Timeline**")
+                st.markdown('<div class="heading-sub">Timeline</div>', unsafe_allow_html=True)
                 timeline = extraction.get("timeline", {})
                 logger.info(f"Timeline entries: {len(timeline)}")
                 for key, val in timeline.items():
                     if val:
                         label = key.replace("_utc", "").replace("_", " ").title()
                         st.markdown(f"- **{label}:** {val}")
-                st.markdown("**Root Cause**")
+                st.markdown('<div class="heading-sub">Root Cause</div>', unsafe_allow_html=True)
                 rc = extraction.get("root_cause", {})
                 logger.info(f"Root cause keys: {list(rc.keys())}")
                 st.markdown(f"- **Status:** {rc.get('status', 'unknown')}")
                 st.markdown(f"- **Summary:** {rc.get('summary', 'N/A')}")
             with col2:
-                st.markdown("**Confidence Scores**")
+                st.markdown('<div class="heading-sub">Confidence Scores</div>', unsafe_allow_html=True)
                 scores = extraction.get("confidence_scores", {})
                 logger.info(f"Confidence scores: {list(scores.keys())}")
                 for key, val in scores.items():
                     emoji = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(val, "⚪")
                     st.markdown(f"- **{key.title()}:** {emoji} {val}")
-                st.markdown("**Data Gaps**")
+                st.markdown('<div class="heading-sub">Data Gaps</div>', unsafe_allow_html=True)
                 gaps = extraction.get("data_gaps", [])
                 logger.info(f"Data gaps: {len(gaps)}")
                 for gap in gaps:
                     st.markdown(f"- ⚠️ {gap}")
-            st.markdown("**Internal Details Excluded**")
+            st.markdown('<div class="heading-sub">Internal Details Excluded</div>', unsafe_allow_html=True)
             excluded = extraction.get("internal_details_to_exclude", [])
             logger.info(f"Internal details excluded: {len(excluded)}")
             st.code(", ".join(excluded) if excluded else "None identified")
@@ -2312,18 +2381,16 @@ def main():
             return
 
         def _zone(label: str, sublabel: str = "") -> None:
-            sub_html = f'<span style="font-size:12px;font-weight:400;color:#94a3b8;margin-left:10px;">{sublabel}</span>' if sublabel else ""
+            sub_html = f'<span class="zone-sub">{sublabel}</span>' if sublabel else ""
             st.markdown(
-                f'<div style="font-size:13px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;'
-                f'color:#475569;padding:0.6rem 0 0.3rem 0;border-bottom:2px solid #cbd5e1;'
-                f'margin:2rem 0 0.75rem 0;">{label}{sub_html}</div>',
+                f'<div class="zone-header">{label}{sub_html}</div>',
                 unsafe_allow_html=True,
             )
 
         def _note(text: str) -> None:
-            """Inline hint — larger than st.caption, smaller than body."""
+            """Instructional hint below a zone header."""
             st.markdown(
-                f'<p style="font-size:13px;color:#64748b;margin:0 0 0.75rem 0;">{text}</p>',
+                f'<p style="font-size:14px;color:#475569;margin:0 0 1rem 0;line-height:1.6;">{text}</p>',
                 unsafe_allow_html=True,
             )
 
@@ -2332,13 +2399,18 @@ def main():
         _has_deploy_zone = bool(_deployment_flags)
         _zn = 0  # zone counter
 
-        _note("① Review the draft → ② Check quality flags → ③ Verify evidence → ④ Complete checklist → Copy.")
+        st.markdown(
+            '<p style="font-size:14px;color:#475569;margin:0 0 1.25rem 0;letter-spacing:0.1px;">'
+            '① Review the draft &nbsp;→&nbsp; ② Check quality flags &nbsp;→&nbsp; ③ Verify evidence &nbsp;→&nbsp; ④ Complete checklist &nbsp;→&nbsp; <strong>Copy</strong>'
+            '</p>',
+            unsafe_allow_html=True,
+        )
 
         # ── Zone: Pre-Flight Context ────────────────────────────────────────
         if _has_deploy_zone:
             _zn += 1
             _zone(f"{'①②③④⑤⑥'[_zn-1]} Pre-Flight Context", "deployments near onset")
-            _note("HIGH = same service as alert, pre-onset. LOW = different service. POST-ONSET = possible worsening factor.")
+            _note("<strong>HIGH</strong> = same service as alert, deployed before onset. &nbsp; <strong>LOW</strong> = different service. &nbsp; <strong>POST-ONSET</strong> = possible worsening factor.")
             render_deployment_alerts(_deployment_flags)
 
         # ── Zone: Status Page Draft ───────────────────────────────────────────
@@ -2394,8 +2466,8 @@ def main():
 
         # ── Tone / Detail / Emphasis controls ────────────────────────────────
         st.markdown(
-            '<div style="font-size:12px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;'
-            'color:#94a3b8;padding:1.2rem 0 0.5rem 0;border-top:1px solid #e2e8f0;'
+            '<div style="font-size:14px;font-weight:700;letter-spacing:1.1px;text-transform:uppercase;'
+            'color:#475569;padding:1.2rem 0 0.5rem 0;border-top:1px solid #e2e8f0;'
             'margin-top:1rem;">Adjust Communications</div>',
             unsafe_allow_html=True,
         )
@@ -2551,7 +2623,7 @@ def main():
         _qc_num = f"{'①②③④⑤⑥'[_zn-1]}"
         if _has_quality_issues:
             _zone(f"{_qc_num} Quality Checks", "required fields validation")
-            _note("Red = must fix before publishing. Yellow = recommended.")
+            _note("<span style='color:#dc2626;font-weight:600;'>Red</span> = must fix before publishing. &nbsp; <span style='color:#d97706;font-weight:600;'>Yellow</span> = recommended.")
             # Show high-severity items first (consistency + validation), then medium
             _all_high = [cf for cf in _consistency_flags if cf.get("severity") == "high"]
             for w in _validation_warnings:
@@ -2581,13 +2653,17 @@ def main():
         # ── Zone: IC Verification ────────────────────────────────────────────
         _zn += 1
         _zone(f"{'①②③④⑤⑥'[_zn-1]} IC Verification", "verify before publishing")
-        _note("5 questions the AI answered from raw evidence. Mark Verified ✅ or Disputed ❌. All 5 must be verified to unlock copy.")
+        st.markdown(
+            '<div style="font-size:14px;color:#334155;margin:0 0 1rem 0;line-height:1.7;">'
+            'The AI answered <strong>5 questions</strong> from raw evidence — each one is a factual claim in the status page draft. '
+            'Read the evidence, then mark each card <strong>Verified ✅</strong> or <strong>Disputed ❌</strong>. '
+            '<span style="color:#059669;font-weight:600;">All 5 verified → copy unlocks.</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         _et_files = st.session_state.sample_data or st.session_state.uploaded_files or {}
         render_evidence_trace(st.session_state.extraction, st.session_state.comms, _et_files)
 
-        # ── Analyst View (collapsed by default) ──────────────────────────────
-        _zone("Analyst View", "optional")
-        render_pattern_analysis(st.session_state.extraction)
         render_postmortem_section(st.session_state.get("postmortem"))
 
         # ── Raw Extraction (collapsed by default) ────────────────────────────
