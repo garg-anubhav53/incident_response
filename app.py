@@ -271,6 +271,66 @@ CSS_STYLES = """
 .sfi-degraded    { background: #fefce8; color: #713f12; border: 1px solid #fde68a; }
 .sfi-offline     { background: #fef2f2; color: #7f1d1d; border: 1px solid #fecaca; }
 .sfi-unknown     { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
+
+/* ── Postmortem section ── */
+.pm-insight-card {
+    background: #ffffff;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    padding: 1rem 1.1rem;
+    margin-bottom: 0.85rem;
+    border-left: 4px solid #0d9488;
+}
+.pm-insight-card.origin-explicit  { border-left-color: #059669; }
+.pm-insight-card.origin-inferred  { border-left-color: #7c3aed; }
+.pm-badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    margin-right: 6px;
+    letter-spacing: 0.3px;
+}
+.pm-cat-deployment_process { background: #fef3c7; color: #92400e; }
+.pm-cat-monitoring         { background: #dbeafe; color: #1e40af; }
+.pm-cat-alerting           { background: #ffedd5; color: #9a3412; }
+.pm-cat-runbook            { background: #ccfbf1; color: #0f5a4e; }
+.pm-cat-architecture       { background: #ede9fe; color: #4c1d95; }
+.pm-cat-testing            { background: #d1fae5; color: #065f46; }
+.pm-origin-explicit        { background: #d1fae5; color: #065f46; }
+.pm-origin-inferred        { background: #ede9fe; color: #4c1d95; }
+.pm-recommendation { font-size: 0.95rem; font-weight: 700; color: #0f172a; margin: 0.5rem 0 0.4rem 0; }
+.pm-verbatim {
+    background: #f8fafc;
+    border-left: 3px solid #059669;
+    padding: 0.4rem 0.75rem;
+    margin: 0.4rem 0;
+    font-size: 0.82rem;
+    color: #334155;
+    font-style: italic;
+    border-radius: 0 4px 4px 0;
+}
+.pm-chain-block {
+    background: #f8fafc;
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    margin-top: 0.5rem;
+    font-size: 0.82rem;
+    color: #475569;
+}
+.pm-chain-block strong { color: #1e293b; }
+.pm-counterfactual { color: #065f46; font-size: 0.82rem; margin-top: 0.3rem; }
+.pm-risk-label { font-size: 0.78rem; color: #94a3b8; margin-top: 0.35rem; }
+.pm-prevention-banner {
+    background: #f0fdf4;
+    border: 1px solid #bbf7d0;
+    border-radius: 8px;
+    padding: 0.6rem 1rem;
+    margin-bottom: 1rem;
+    font-size: 0.88rem;
+    color: #065f46;
+}
 </style>
 """
 st.markdown(CSS_STYLES, unsafe_allow_html=True)
@@ -376,6 +436,52 @@ Return ONLY valid JSON, no markdown fencing:
   ],
   "data_gaps": ["Important unknowns — be specific about what's missing and why it matters"],
   "internal_details_to_exclude": ["Internal names, emails, hostnames, PRs, SHAs found in the data"]
+}"""
+
+# ── Postmortem system prompt ───────────────────────────────────────────────────
+POSTMORTEM_SYSTEM_PROMPT = """You are a post-incident review analyst for a SaaS security platform. Your job is to extract and infer actionable engineering process improvements from incident data — insights specific enough to act on, with clear causal reasoning that makes each recommendation defensible.
+
+## Task
+Identify 1–5 postmortem insights from this incident. Two sources:
+
+SOURCE A — EXPLICIT TEAM STATEMENTS: Search the raw incident context for engineer statements about future improvements. Scan for: "postmortem", "next time", "we should", "could've been caught", "checklist", "we need to", "going forward", "action item", "should have". Extract these verbatim with author and timestamp. These have the highest authority — engineers who know the system said them.
+
+SOURCE B — INFERRED FROM CAUSAL CHAIN: Use the structured root cause and timeline to identify the specific process gap that let this failure reach production undetected. Ask: at which step (pre-deploy check, deployment gate, monitoring threshold, alerting rule, runbook step) could this incident have been stopped — and what specifically was absent? Only generate an inferred insight if you can name the exact missing mechanism. Reject vague improvements like "improve monitoring" or "better testing."
+
+## Rules
+1. SPECIFIC OVER GENERIC. "Add connection pool saturation alert firing when api-gateway pool utilization exceeds 80% for 3 consecutive minutes" is bankable. "Improve monitoring" is not.
+2. Every insight MUST include (a) a causal_chain — how the failure unfolded step-by-step, and (b) a counterfactual — the specific outcome if this recommendation existed (caught at pre-deploy / detected within X minutes / prevented entirely).
+3. Explicit team statements are highest priority. Extract them first and verbatim.
+4. For inferred insights: only include those where you can identify a specific named gap — a missing check, a missing alert rule, a missing runbook decision point. If you cannot name it specifically, omit the insight.
+5. Rank by prevention power: insights that would have PREVENTED the incident outrank those that only DETECT it faster.
+6. Cap at 5. Three strong, specific insights beat five generic ones.
+7. If the raw context contains no explicit statements and the root cause provides insufficient evidence for a specific inferred gap, return fewer insights rather than inventing weak ones.
+
+## Categories (use exactly these strings):
+- deployment_process: pre-deploy validation gates, deployment review checklists, rollout criteria
+- monitoring: metric baselines, metric collection gaps, dashboard coverage
+- alerting: alert rule additions, threshold calibration, on-call routing
+- runbook: response procedure gaps, escalation path clarity, decision tree steps
+- architecture: resource limits, circuit breakers, connection pool configuration, retry bounds
+- testing: load test coverage, staging environment parity, failure mode simulation
+
+Return ONLY valid JSON matching this schema. No markdown fencing, no explanation:
+
+{
+  "insights": [
+    {
+      "recommendation": "Specific, actionable improvement — name the exact thing to add, change, or validate",
+      "category": "deployment_process | monitoring | alerting | runbook | architecture | testing",
+      "origin": "explicit_team | inferred_from_root_cause | inferred_from_pattern",
+      "verbatim_source": "@author [timestamp]: exact quote — or null if inferred",
+      "causal_chain": "Step-by-step how this failure unfolded: trigger → mechanism → impact (1-2 sentences)",
+      "counterfactual": "If this recommendation existed: [specific outcome — caught at pre-deploy / detected within N minutes / impact reduced to X]",
+      "risk_class": "Short label for the failure class this guards against (e.g., 'deployment-induced connection pool exhaustion')",
+      "confidence": "high | medium | low"
+    }
+  ],
+  "summary": "1-2 sentences: the systemic theme — what category of engineering process gap this incident reveals",
+  "prevention_stage": "pre-deploy | deployment | alerting | response | unknown"
 }"""
 
 # ── Generation system prompt ───────────────────────────────────────────────────
@@ -631,11 +737,12 @@ def parse_llm_json(text: str) -> dict:
 TOKEN_LIMITS = {
     "extraction": 24000,   # Complex incident analysis with inference logs (4x increased)
     "generation": 16000,   # Multi-stage communications (4x increased)
+    "postmortem": 2000,    # 1-5 insights with causal chains and counterfactuals
     "default": 8000       # Fallback for other calls (4x increased)
 }
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
-def call_claude(user_message: str, system_prompt: str, max_tokens: int = None, temperature: float = 0.2, model: str = "claude-sonnet-4-5") -> dict:
+def call_claude(user_message: str, system_prompt: str, max_tokens: int = None, temperature: float = 0.2, model: str = "claude-opus-4-6") -> dict:
     if max_tokens is None:
         max_tokens = TOKEN_LIMITS["default"]
 
@@ -1036,7 +1143,7 @@ def run_outreach(customer_description: str, extraction: dict, comms: dict) -> di
         f"PUBLIC STATUS PAGE COMMUNICATIONS:\n{json.dumps(comms, indent=2)}\n\n"
         f"INCIDENT EXTRACTION:\n{json.dumps(extraction, indent=2)}"
     )
-    result = call_claude(user_message, OUTREACH_SYSTEM_PROMPT, max_tokens=1200, temperature=0.4)
+    result = call_claude(user_message, OUTREACH_SYSTEM_PROMPT, max_tokens=1200, temperature=0.4, model="claude-sonnet-4-6")
     logger.info(f"run_outreach: DONE keys={list(result.keys()) if isinstance(result, dict) else type(result).__name__}")
     return result
 
@@ -1050,6 +1157,52 @@ def run_exec_brief(extraction: dict) -> str:
     brief = result.get("executive_brief", "")
     logger.info(f"run_exec_brief: DONE ({len(brief)} chars)")
     return brief
+
+
+def run_postmortem_analysis(extraction: dict, raw_files: dict) -> dict:
+    """Extract and infer postmortem process improvement insights.
+
+    Takes the structured extraction (for causal chain reasoning) and the raw
+    incident files (to find explicit team statements about future improvements).
+    Returns a dict with 'insights', 'summary', and 'prevention_stage'.
+    """
+    logger.info("run_postmortem_analysis: starting")
+
+    # Pull the raw context that most likely contains postmortem statements.
+    # incident_context.txt (Slack thread) is the primary source; fall back to
+    # any other text files if it's not present.
+    raw_context_parts = []
+    for fname, content in raw_files.items():
+        if "incident_context" in fname.lower() or fname.endswith(".txt"):
+            raw_context_parts.append(f"=== {fname} ===\n{content[:3000]}")
+    raw_context = "\n\n".join(raw_context_parts) if raw_context_parts else "No raw context available."
+
+    # Compact extraction fields — postmortem reasoning needs root cause,
+    # timeline, pattern, and resolution. Skip inference_log / evidence_trace
+    # to keep the user message tight.
+    compact_extraction = {
+        k: extraction.get(k)
+        for k in ("incident_summary", "root_cause", "resolution", "timeline",
+                  "pattern_classification", "customer_impact", "data_gaps")
+        if extraction.get(k) is not None
+    }
+
+    user_message = (
+        f"RAW INCIDENT CONTEXT (Slack thread and engineer notes):\n{raw_context}\n\n"
+        f"STRUCTURED INCIDENT ANALYSIS:\n{json.dumps(compact_extraction, indent=2)}"
+    )
+    logger.info(f"run_postmortem_analysis: payload {len(user_message)} chars, calling Claude...")
+
+    result = call_claude(
+        user_message,
+        POSTMORTEM_SYSTEM_PROMPT,
+        max_tokens=TOKEN_LIMITS["postmortem"],
+        temperature=0.2,
+    )
+    insights = result.get("insights", [])
+    logger.info(f"run_postmortem_analysis: DONE — {len(insights)} insights, "
+                f"prevention_stage={result.get('prevention_stage', 'unknown')}")
+    return result
 
 
 # ── Inference log persistence ──────────────────────────────────────────────────
@@ -1772,6 +1925,102 @@ def render_pattern_analysis(extraction: dict) -> None:
         st.error(f"Error rendering pattern analysis: {e}")
 
 
+def render_postmortem_section(postmortem: dict) -> None:
+    logger.info("=== render_postmortem_section STARTED ===")
+    try:
+        if not postmortem:
+            logger.info("No postmortem data to display")
+            return
+
+        insights = postmortem.get("insights", [])
+        summary = postmortem.get("summary", "")
+        prevention_stage = postmortem.get("prevention_stage", "unknown")
+        logger.info(f"Postmortem: {len(insights)} insights, prevention_stage={prevention_stage}")
+
+        if not insights:
+            logger.info("No postmortem insights to display")
+            return
+
+        stage_label = {
+            "pre-deploy": "Could have been prevented pre-deploy",
+            "deployment":  "Could have been caught during deployment",
+            "alerting":    "Could have been detected faster via alerting",
+            "response":    "Response procedure could have reduced impact",
+            "unknown":     "Prevention stage undetermined",
+        }.get(prevention_stage, prevention_stage.replace("-", " ").title())
+
+        cat_label = {
+            "deployment_process": "Deployment Process",
+            "monitoring":         "Monitoring",
+            "alerting":           "Alerting",
+            "runbook":            "Runbook",
+            "architecture":       "Architecture",
+            "testing":            "Testing",
+        }
+
+        conf_emoji = {"high": "🟢", "medium": "🟡", "low": "🔴"}
+
+        # Explicit team insights first, then inferred
+        ordered = sorted(
+            insights,
+            key=lambda x: 0 if x.get("origin") == "explicit_team" else 1
+        )
+
+        with st.expander(f"📋 Post-Incident Review ({len(insights)} insight{'s' if len(insights) != 1 else ''})", expanded=False):
+            if summary:
+                st.markdown(
+                    f'<div class="pm-prevention-banner">'
+                    f'<strong>Systemic theme:</strong> {summary}<br>'
+                    f'<strong>Earliest prevention point:</strong> {stage_label}'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+            for insight in ordered:
+                origin = insight.get("origin", "inferred_from_root_cause")
+                origin_class = "origin-explicit" if origin == "explicit_team" else "origin-inferred"
+                category = insight.get("category", "")
+                cat_class = f"pm-cat-{category}"
+                cat_display = cat_label.get(category, category.replace("_", " ").title())
+                orig_display = "Team Statement" if origin == "explicit_team" else "AI-Inferred"
+                orig_class = "pm-origin-explicit" if origin == "explicit_team" else "pm-origin-inferred"
+                confidence = insight.get("confidence", "medium")
+                conf = conf_emoji.get(confidence, "⚪")
+                recommendation = insight.get("recommendation", "")
+                verbatim = insight.get("verbatim_source", None)
+                causal_chain = insight.get("causal_chain", "")
+                counterfactual = insight.get("counterfactual", "")
+                risk_class = insight.get("risk_class", "")
+
+                card_html = (
+                    f'<div class="pm-insight-card {origin_class}">'
+                    f'<span class="pm-badge {cat_class}">{cat_display}</span>'
+                    f'<span class="pm-badge {orig_class}">{"📋 " if origin == "explicit_team" else "🔍 "}{orig_display}</span>'
+                    f'<span style="font-size:11px;color:#94a3b8;">{conf} {confidence} confidence</span>'
+                    f'<div class="pm-recommendation">{recommendation}</div>'
+                )
+                if verbatim:
+                    card_html += f'<div class="pm-verbatim">"{verbatim}"</div>'
+                if causal_chain or counterfactual:
+                    card_html += '<div class="pm-chain-block">'
+                    if causal_chain:
+                        card_html += f'<strong>Why this happened:</strong> {causal_chain}'
+                    if counterfactual:
+                        card_html += f'<div class="pm-counterfactual"><strong>If implemented:</strong> {counterfactual}</div>'
+                    card_html += '</div>'
+                if risk_class:
+                    card_html += f'<div class="pm-risk-label">Guards against: {risk_class}</div>'
+                card_html += '</div>'
+                st.markdown(card_html, unsafe_allow_html=True)
+
+        logger.info("=== render_postmortem_section COMPLETED ===")
+
+    except Exception as e:
+        logger.error(f"Error in render_postmortem_section: {e}")
+        logger.info("=== render_postmortem_section FAILED ===")
+        st.error(f"Error rendering post-incident review: {e}")
+
+
 def render_validation(warnings: list) -> None:
     logger.info(f"=== render_validation STARTED ===")
     logger.info(f"Warnings to render: {len(warnings)}")
@@ -1888,7 +2137,7 @@ def main():
         ("consistency_flags", None),
         ("verify_status", None), ("verify_notes", None), ("publish_checks", None),
         ("outreach_emails", []),
-        ("rewrite_comms", None), ("exec_brief", None),
+        ("rewrite_comms", None), ("exec_brief", None), ("postmortem", None),
         ("tone_control", "Balanced"), ("detail_control", "Standard"), ("emphasis_control", "Customer Impact"),
     ]:
         if key not in st.session_state:
@@ -2014,6 +2263,16 @@ def main():
 
             save_inference_log(extraction)
             bar.progress(65)
+
+            status.text("📋 Generating post-incident review (Claude)...")
+            try:
+                postmortem = run_postmortem_analysis(extraction, file_contents)
+                st.session_state.postmortem = postmortem
+                logger.info(f"processing: postmortem done — {len(postmortem.get('insights', []))} insights")
+            except Exception as _pm_err:
+                logger.error(f"processing: postmortem FAILED (non-fatal) — {_pm_err}")
+                st.session_state.postmortem = None
+            bar.progress(80)
 
             status.text("✍️ Generating communications (Claude)...")
             comms = run_generation(extraction)
@@ -2329,6 +2588,7 @@ def main():
         # ── Analyst View (collapsed by default) ──────────────────────────────
         _zone("Analyst View", "optional")
         render_pattern_analysis(st.session_state.extraction)
+        render_postmortem_section(st.session_state.get("postmortem"))
 
         # ── Raw Extraction (collapsed by default) ────────────────────────────
         _zone("Raw Extraction Data", "optional")
@@ -2344,7 +2604,7 @@ def main():
                             "deployment_flags", "validation_warnings",
                             "consistency_flags",
                             "verify_status", "verify_notes", "publish_checks",
-                            "outreach_emails", "rewrite_comms", "exec_brief",
+                            "outreach_emails", "rewrite_comms", "exec_brief", "postmortem",
                             "tone_control", "detail_control", "emphasis_control"):
                     if key == "step":
                         st.session_state[key] = "upload"
